@@ -166,7 +166,7 @@ def export_event(
     if not path.exists():
         raise HTTPException(status_code=404, detail="aligned.parquet not found")
     df = pd.read_parquet(path)
-    records = _query_df(df, start, end, None, 0)
+    records = _query_df(df, start, end, None, None, None, None, None, 0)
     export_dir = OUTPUT_ROOT / "events" / event_id / "exports"
     export_dir.mkdir(parents=True, exist_ok=True)
     if format == "hdf5":

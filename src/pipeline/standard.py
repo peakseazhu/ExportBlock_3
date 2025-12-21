@@ -40,6 +40,13 @@ def _clean_timeseries(df: pd.DataFrame, config: Dict[str, Any]) -> Tuple[pd.Data
     threshold = float(outlier_cfg.get("threshold", 4.0))
 
     def apply_group(group: pd.DataFrame) -> pd.DataFrame:
+        station_id = group["station_id"].iloc[0] if "station_id" in group else group.name[0]
+        channel = group["channel"].iloc[0] if "channel" in group else group.name[1]
+        if "station_id" not in group:
+            group = group.copy()
+            group["station_id"] = station_id
+            group["channel"] = channel
+
         values = group["value"].astype(float)
         mean = values.mean()
         std = values.std() if values.std() != 0 else 1.0
@@ -71,7 +78,10 @@ def _clean_timeseries(df: pd.DataFrame, config: Dict[str, Any]) -> Tuple[pd.Data
             group.at[idx, "quality_flags"] = flags
         return group
 
-    df = df.groupby(["station_id", "channel"], group_keys=False).apply(apply_group)
+    try:
+        df = df.groupby(["station_id", "channel"], group_keys=False).apply(apply_group, include_groups=False)
+    except TypeError:
+        df = df.groupby(["station_id", "channel"], group_keys=False).apply(apply_group)
 
     filter_cfg = config.get("preprocess", {}).get("filter", {})
     filter_enabled = filter_cfg.get("enabled", False)

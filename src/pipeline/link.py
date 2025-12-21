@@ -63,6 +63,10 @@ def run_link(
         if df.empty:
             continue
         df = df.copy()
+        if "source" not in df.columns:
+            df["source"] = source
+        if "distance_km" not in df.columns:
+            df["distance_km"] = np.nan
         df["ts_ms"] = _align_ts(df["ts_ms"], interval_ms)
         df["event_id"] = event["event_id"]
         aligned_frames.append(df)
