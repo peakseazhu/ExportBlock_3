@@ -26,7 +26,17 @@ def _parse_time(value: Optional[str]) -> Optional[int]:
     return int(pd.Timestamp(value).value // 1_000_000)
 
 
-def _query_df(df: pd.DataFrame, start: Optional[str], end: Optional[str], station_id: Optional[str], limit: int):
+def _query_df(
+    df: pd.DataFrame,
+    start: Optional[str],
+    end: Optional[str],
+    station_id: Optional[str],
+    lat_min: Optional[float],
+    lat_max: Optional[float],
+    lon_min: Optional[float],
+    lon_max: Optional[float],
+    limit: int,
+):
     if df.empty:
         return []
     start_ms = _parse_time(start)
@@ -37,6 +47,14 @@ def _query_df(df: pd.DataFrame, start: Optional[str], end: Optional[str], statio
         df = df[df["ts_ms"] <= end_ms]
     if station_id:
         df = df[df["station_id"] == station_id]
+    if lat_min is not None and "lat" in df.columns:
+        df = df[df["lat"] >= lat_min]
+    if lat_max is not None and "lat" in df.columns:
+        df = df[df["lat"] <= lat_max]
+    if lon_min is not None and "lon" in df.columns:
+        df = df[df["lon"] >= lon_min]
+    if lon_max is not None and "lon" in df.columns:
+        df = df[df["lon"] <= lon_max]
     if limit:
         df = df.head(limit)
     return df.to_dict(orient="records")
@@ -53,13 +71,17 @@ def raw_query(
     start: Optional[str] = None,
     end: Optional[str] = None,
     station_id: Optional[str] = None,
+    lat_min: Optional[float] = None,
+    lat_max: Optional[float] = None,
+    lon_min: Optional[float] = None,
+    lon_max: Optional[float] = None,
     limit: int = 5000,
 ):
     source_path = OUTPUT_ROOT / "raw" / source
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
     df = read_parquet(source_path)
-    return _query_df(df, start, end, station_id, limit)
+    return _query_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
 
 
 @app.get("/standard/query")
@@ -68,13 +90,17 @@ def standard_query(
     start: Optional[str] = None,
     end: Optional[str] = None,
     station_id: Optional[str] = None,
+    lat_min: Optional[float] = None,
+    lat_max: Optional[float] = None,
+    lon_min: Optional[float] = None,
+    lon_max: Optional[float] = None,
     limit: int = 5000,
 ):
     source_path = OUTPUT_ROOT / "standard" / source
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
     df = read_parquet(source_path)
-    return _query_df(df, start, end, station_id, limit)
+    return _query_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
 
 
 @app.get("/events")

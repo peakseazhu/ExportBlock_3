@@ -4,8 +4,8 @@
 - `GET /health`：健康检查
 
 ## Raw/Standard 查询
-- `GET /raw/query?source=geomag|aef|seismic|vlf&start=<ISO>&end=<ISO>&station_id=<id>&limit=5000`
-- `GET /standard/query?source=geomag|aef|seismic|vlf&start=<ISO>&end=<ISO>&station_id=<id>&limit=5000`
+- `GET /raw/query?source=geomag|aef|seismic|vlf&start=<ISO>&end=<ISO>&station_id=<id>&lat_min=&lat_max=&lon_min=&lon_max=&limit=5000`
+- `GET /standard/query?source=geomag|aef|seismic|vlf&start=<ISO>&end=<ISO>&station_id=<id>&lat_min=&lat_max=&lon_min=&lon_max=&limit=5000`
 
 ## 事件级
 - `GET /events`：事件列表（默认仅 READY）
