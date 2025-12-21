@@ -7,6 +7,7 @@ from typing import List, Optional
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 from src.utils import ensure_dir
 
@@ -40,7 +41,7 @@ def write_parquet(
         )
     else:
         file_path = output_dir / "data.parquet"
-        table.to_parquet(file_path, compression=compression)
+        pq.write_table(table, file_path, compression=compression)
 
 
 def read_parquet(path: Path) -> pd.DataFrame:

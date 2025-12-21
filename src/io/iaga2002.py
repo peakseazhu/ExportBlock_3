@@ -45,7 +45,7 @@ def parse_iaga_file(
     data_start = _find_data_start(lines)
     meta = _parse_header(lines[:data_start])
 
-    df = pd.read_csv(path, delim_whitespace=True, skiprows=data_start, header=0)
+    df = pd.read_csv(path, sep=r"\s+", skiprows=data_start, header=0)
     df = df[[col for col in df.columns if col.strip() != "|"]]
     df["ts"] = pd.to_datetime(df["DATE"] + " " + df["TIME"], utc=True, errors="coerce")
     df["ts_ms"] = (df["ts"].astype("int64") // 1_000_000).astype("int64")

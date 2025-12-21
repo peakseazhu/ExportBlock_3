@@ -22,7 +22,7 @@ def test_anomaly_model(tmp_path: Path):
     )
     df.to_parquet(features_dir / "features.parquet", index=False)
 
-    config = {"events": [{"event_id": event_id}], "features": {"anomaly_threshold": 1.0, "topn_anomalies": 10}}
+    config = {"events": [{"event_id": event_id}], "features": {"anomaly_threshold": 0.5, "topn_anomalies": 10}}
     run_model(tmp_path, config, output_paths, "run", "hash", False, event_id)
 
     anomaly_path = features_dir / "anomaly.parquet"

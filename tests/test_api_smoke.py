@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+from src.store.parquet import write_parquet
 
 @pytest.mark.smoke
 def test_api_smoke(tmp_path: Path):
@@ -30,8 +31,8 @@ def test_api_smoke(tmp_path: Path):
             }
         ]
     )
-    df.to_parquet(raw_dir / "data.parquet", index=False)
-    df.to_parquet(standard_dir / "data.parquet", index=False)
+    write_parquet(df, raw_dir, partition_cols=None)
+    write_parquet(df, standard_dir, partition_cols=None)
 
     os.environ["OUTPUT_ROOT"] = str(output_root)
     import src.api.app as app_module

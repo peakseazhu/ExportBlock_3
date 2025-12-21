@@ -27,7 +27,11 @@ def _format_top_anomalies(df: pd.DataFrame | None) -> str:
         return "No anomaly file"
     if df.empty:
         return "No anomalies above threshold"
-    return df.to_markdown(index=False)
+    headers = df.columns.tolist()
+    lines = ["| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
+    for _, row in df.iterrows():
+        lines.append("| " + " | ".join(str(row[col]) for col in headers) + " |")
+    return "\n".join(lines)
 
 
 def _plot_ref(report_dir: Path, plot_path: Path) -> str:
@@ -95,7 +99,7 @@ def render_event_summary(
         "plot_station_map_missing": "" if plots["station"].exists() else "MISSING: plot_station_map.html",
         "plot_filter_effect_missing": "" if plots["filter"].exists() else "MISSING: plot_filter_effect.html",
         "plot_vlf_spectrogram_missing": "" if plots["vlf"].exists() else "MISSING: plot_vlf_spectrogram.html",
-        "reproduce_cmd": f\"python scripts/pipeline_run.py --stages link,features,model,plots --event_id {event_id}\",
+        "reproduce_cmd": f"python scripts/pipeline_run.py --stages link,features,model,plots --event_id {event_id}",
         "notes": json.dumps(
             {
                 "dq_event_link": dq_event_link,
@@ -117,18 +121,18 @@ def render_event_summary(
 
     if format_type in {"html", "both"}:
         html_path = report_dir / "event_summary.html"
-        html_path.write_text(f\"<pre>{markdown}</pre>\", encoding=\"utf-8\")
+        html_path.write_text(f"<pre>{markdown}</pre>", encoding="utf-8")
 
     return md_path
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=\"Render event summary report.\")
-    parser.add_argument(\"--event_id\", required=True)
-    parser.add_argument(\"--format\", default=\"md\", choices=[\"md\", \"html\", \"both\"])
+    parser = argparse.ArgumentParser(description="Render event summary report.")
+    parser.add_argument("--event_id", required=True)
+    parser.add_argument("--format", default="md", choices=["md", "html", "both"])
     args = parser.parse_args()
-    render_event_summary(args.event_id, ROOT / \"outputs\", args.format)
+    render_event_summary(args.event_id, ROOT / "outputs", args.format)
 
 
-if __name__ == \"__main__\":
+if __name__ == "__main__":
     main()

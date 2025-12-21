@@ -11,7 +11,7 @@ from src.io.vlf import read_vlf_cdf
 @pytest.mark.unit
 def test_read_vlf_cdf(monkeypatch):
     epoch = cdflib.cdfepoch.compute_tt2000(
-        [datetime(2020, 1, 1, tzinfo=timezone.utc), datetime(2020, 1, 1, 0, 0, 1, tzinfo=timezone.utc)]
+        [[2020, 1, 1, 0, 0, 0, 0], [2020, 1, 1, 0, 0, 1, 0]]
     )
     freq = np.array([10.0, 100.0])
     ch1 = np.array([[1.0, -1.0], [2.0, 3.0]])
