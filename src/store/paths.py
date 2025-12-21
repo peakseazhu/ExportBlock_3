@@ -7,6 +7,7 @@ class OutputPaths:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.manifests = root / "manifests"
+        self.ingest = root / "ingest"
         self.raw = root / "raw"
         self.standard = root / "standard"
         self.linked = root / "linked"
@@ -20,6 +21,7 @@ class OutputPaths:
         for path in [
             self.root,
             self.manifests,
+            self.ingest,
             self.raw,
             self.standard,
             self.linked,

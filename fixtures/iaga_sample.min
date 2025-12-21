@@ -1,0 +1,10 @@
+ Format                 IAGA-2002                                    |
+ Station Name           Kakioka                                      |
+ IAGA Code              KAK                                          |
+ Geodetic Latitude      36.232                                       |
+ Geodetic Longitude     140.186                                      |
+ Elevation              36                                           |
+ Reported               XYZG                                         |
+DATE       TIME         DOY     KAKX      KAKY      KAKZ      KAKG   |
+2020-01-01 00:00:00.000 001     100.00    200.00    300.00    400.00
+2020-01-01 00:01:00.000 001     88888.00  200.00    300.00    400.00

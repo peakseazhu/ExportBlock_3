@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict
 
+from src.pipeline.ingest import run_ingest
 from src.pipeline.manifest import build_manifest
+from src.pipeline.raw import run_raw
+from src.pipeline.spatial import run_spatial
+from src.pipeline.standard import run_standard
 from src.store.paths import OutputPaths
 
 
@@ -23,20 +27,10 @@ def _not_ready(stage: str) -> None:
     raise NotImplementedError(f"Stage not implemented yet: {stage}")
 
 
-def run_ingest(*args: Any, **kwargs: Any) -> None:
-    _not_ready("ingest")
-
-
-def run_raw(*args: Any, **kwargs: Any) -> None:
-    _not_ready("raw")
-
-
-def run_standard(*args: Any, **kwargs: Any) -> None:
-    _not_ready("standard")
-
-
-def run_spatial(*args: Any, **kwargs: Any) -> None:
-    _not_ready("spatial")
+run_ingest = run_ingest
+run_raw = run_raw
+run_standard = run_standard
+run_spatial = run_spatial
 
 
 def run_link(*args: Any, **kwargs: Any) -> None:
