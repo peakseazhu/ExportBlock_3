@@ -6,6 +6,10 @@ from typing import Any, Dict
 from src.pipeline.ingest import run_ingest
 from src.pipeline.manifest import build_manifest
 from src.pipeline.raw import run_raw
+from src.pipeline.features import run_features
+from src.pipeline.link import run_link
+from src.pipeline.model import run_model
+from src.pipeline.plots import run_plots
 from src.pipeline.spatial import run_spatial
 from src.pipeline.standard import run_standard
 from src.store.paths import OutputPaths
@@ -33,17 +37,7 @@ run_standard = run_standard
 run_spatial = run_spatial
 
 
-def run_link(*args: Any, **kwargs: Any) -> None:
-    _not_ready("link")
-
-
-def run_features(*args: Any, **kwargs: Any) -> None:
-    _not_ready("features")
-
-
-def run_model(*args: Any, **kwargs: Any) -> None:
-    _not_ready("model")
-
-
-def run_plots(*args: Any, **kwargs: Any) -> None:
-    _not_ready("plots")
+run_link = run_link
+run_features = run_features
+run_model = run_model
+run_plots = run_plots
