@@ -12,6 +12,7 @@ jinja2
 plotly
 matplotlib
 httpx
+tables
 pytest
 pytest-cov
 ruff

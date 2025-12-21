@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>事件仪表盘</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap");
+      :root {
+        --bg: #f5f3ef;
+        --ink: #1b1b1f;
+        --accent: #d94f2f;
+        --muted: #7a6f67;
+        --card: #ffffff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "Space Grotesk", sans-serif;
+        background: radial-gradient(circle at top left, #fdf7f0, #f5f3ef);
+        color: var(--ink);
+      }
+      .hero {
+        padding: 48px 10vw 24px;
+        background: linear-gradient(120deg, rgba(217, 79, 47, 0.15), transparent);
+      }
+      .hero h1 {
+        margin: 0 0 8px;
+        font-size: clamp(28px, 4vw, 44px);
+        letter-spacing: -0.02em;
+      }
+      .hero p {
+        margin: 0;
+        color: var(--muted);
+        max-width: 520px;
+      }
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 16px;
+        padding: 24px 10vw 60px;
+      }
+      .card {
+        background: var(--card);
+        border-radius: 16px;
+        padding: 18px;
+        box-shadow: 0 12px 30px rgba(27, 27, 31, 0.08);
+        border: 1px solid rgba(27, 27, 31, 0.05);
+      }
+      .card h2 {
+        font-size: 18px;
+        margin: 0 0 6px;
+      }
+      .badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        background: rgba(217, 79, 47, 0.1);
+        color: var(--accent);
+      }
+      .link {
+        display: inline-flex;
+        margin-top: 12px;
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      @media (max-width: 640px) {
+        .hero,
+        .cards {
+          padding-left: 6vw;
+          padding-right: 6vw;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="hero">
+      <h1>事件仪表盘</h1>
+      <p>展示已完成的地震事件成果，支持快速查看关联数据、特征与可视化证据。</p>
+    </header>
+    <section class="cards">
+      {% for event in events %}
+      <div class="card">
+        <h2>{{ event.event_id }}</h2>
+        <span class="badge">READY</span>
+        <a class="link" href="/ui/events/{{ event.event_id }}">查看详情 →</a>
+      </div>
+      {% else %}
+      <div class="card">
+        <h2>暂无就绪事件</h2>
+        <p class="muted">请先运行 finalize 生成事件目录。</p>
+      </div>
+      {% endfor %}
+    </section>
+  </body>
+</html>

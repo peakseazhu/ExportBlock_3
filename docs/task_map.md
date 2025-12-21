@@ -1,0 +1,25 @@
+# Task Map
+
+本文件用于将 `project_task_list.csv` 中的 TaskID 与计划章节对应，便于验收追踪。
+
+| TaskID | 章节 |
+| --- | --- |
+| T00_ENV_SETUP | 5.4 |
+| T01_MANIFEST_SCAN | 4.A0 |
+| T02_IAGA_PARSER | 4.A1 |
+| T03_MSEED_INGEST | 4.A2 |
+| T04_STATIONXML_JOIN | 4.A3 |
+| T05_VLF_CDF_INGEST | 4.A5 |
+| T06_RAW_STORE | 4.A′ |
+| T07_STANDARD_PREPROCESS | 4.B |
+| T08_SPATIAL_INDEX | 4.D |
+| T09_LINK_EVENT | 4.E |
+| T10_FEATURES_EXTRACT | 4.F |
+| T11_MODEL_RULEBOOK | 4.F2 |
+| T12_PLOTS | 4.H |
+| T13_FINALIZE_EVENT | 6.2 |
+| T14_EVENT_BUNDLE | 6.2 |
+| T15_FASTAPI | 4.G |
+| T16_UI_DASHBOARD | 4.I |
+| T17_EXPORT | 4.G |
+| T18_DOCS | 5 + 6 |
