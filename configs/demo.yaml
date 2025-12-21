@@ -26,15 +26,15 @@ outputs:
   root: "outputs"
 
 limits:
-  max_files_per_source: 2
-  max_rows_per_source: 20000
+  max_files_per_source: 1
+  max_rows_per_source: 5000
 
 events:
-  - event_id: "eq_20200912_024411"
-    name: "2020-09-12 Japan"
-    origin_time_utc: "2020-09-12T02:44:11Z"
-    lat: 38.748
-    lon: 142.245
+  - event_id: "eq_20200101_000000"
+    name: "2020-01-01 Demo"
+    origin_time_utc: "2020-01-01T00:00:00Z"
+    lat: 36.232
+    lon: 140.186
     depth_km: 10.0
     magnitude: 5.0
 

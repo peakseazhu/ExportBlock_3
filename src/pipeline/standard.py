@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 from obspy import read
+import zarr
 
 from src.dq.reporting import basic_stats, write_dq_report
 from src.store.parquet import read_parquet, write_parquet

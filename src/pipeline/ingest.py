@@ -4,6 +4,8 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -15,7 +17,6 @@ from src.io.iaga2002 import parse_iaga_file
 from src.io.seismic import extract_trace_metadata, join_station_metadata, load_station_metadata
 from src.io.vlf import compute_gap_report, read_vlf_cdf
 from src.store.parquet import write_parquet
-from src.store.zarr_utils import build_compressor
 from src.utils import ensure_dir, write_json
 
 
@@ -70,7 +71,7 @@ def run_ingest(
     geomag_df = pd.concat(geomag_frames, ignore_index=True) if geomag_frames else pd.DataFrame()
     if max_rows:
         geomag_df = geomag_df.head(max_rows)
-    write_parquet(geomag_df, output_paths.ingest / "geomag", partition_cols=["source"])
+    write_parquet(geomag_df, output_paths.ingest / "geomag", partition_cols=None)
     dq_iaga = {"geomag": basic_stats(geomag_df)}
 
     # AEF
@@ -80,7 +81,7 @@ def run_ingest(
     aef_df = pd.concat(aef_frames, ignore_index=True) if aef_frames else pd.DataFrame()
     if max_rows:
         aef_df = aef_df.head(max_rows)
-    write_parquet(aef_df, output_paths.ingest / "aef", partition_cols=["source"])
+    write_parquet(aef_df, output_paths.ingest / "aef", partition_cols=None)
     dq_iaga["aef"] = basic_stats(aef_df)
     write_dq_report(output_paths.reports / "dq_ingest_iaga.json", dq_iaga)
 
@@ -115,8 +116,6 @@ def run_ingest(
     vlf_files = _collect_files(vlf_root, vlf_cfg.get("patterns", []), max_files)
     vlf_records = []
     vlf_dt_medians = []
-    compressor_name = config.get("storage", {}).get("zarr", {}).get("compressor", "zstd")
-    compressor = build_compressor(compressor_name)
     preview_cfg = config.get("vlf", {}).get("preview", {})
     max_time_bins = int(preview_cfg.get("max_time_bins", 200))
     max_freq_bins = int(preview_cfg.get("max_freq_bins", 200))
@@ -133,10 +132,15 @@ def run_ingest(
         ensure_dir(vlf_dir)
         zarr_path = vlf_dir / "spectrogram.zarr"
         root = zarr.open(str(zarr_path), mode="w")
-        root.create_dataset("epoch_ns", data=epoch_ns, compressor=compressor)
-        root.create_dataset("freq_hz", data=payload["freq_hz"], compressor=compressor)
-        root.create_dataset("ch1", data=payload["ch1"], compressor=compressor)
-        root.create_dataset("ch2", data=payload["ch2"], compressor=compressor)
+        root.create_dataset("epoch_ns", data=epoch_ns, shape=epoch_ns.shape, dtype=epoch_ns.dtype)
+        root.create_dataset(
+            "freq_hz",
+            data=payload["freq_hz"],
+            shape=payload["freq_hz"].shape,
+            dtype=payload["freq_hz"].dtype,
+        )
+        root.create_dataset("ch1", data=payload["ch1"], shape=payload["ch1"].shape, dtype=payload["ch1"].dtype)
+        root.create_dataset("ch2", data=payload["ch2"], shape=payload["ch2"].shape, dtype=payload["ch2"].dtype)
 
         meta = {
             "station_id": payload["station_id"],

@@ -63,7 +63,7 @@ def main() -> None:
 
     event_id = args.event_id
     output_root = ROOT / "outputs"
-    tmp_dir = output_root / "events" / event_id / f".tmp_{_utc_run_id()}"
+    tmp_dir = output_root / "events" / f".tmp_{event_id}_{_utc_run_id()}"
     final_dir = output_root / "events" / event_id
 
     linked_dir = output_root / "linked" / event_id

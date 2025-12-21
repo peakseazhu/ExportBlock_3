@@ -29,15 +29,19 @@ def write_parquet(
 ) -> None:
     ensure_dir(output_dir)
     df = _normalize_flags(df)
+    if partition_cols and not set(partition_cols).issubset(df.columns):
+        partition_cols = None
     table = pa.Table.from_pandas(df)
     if partition_cols:
+        file_options = ds.ParquetFileFormat().make_write_options(compression=compression)
         ds.write_dataset(
             table,
             output_dir,
             format="parquet",
             partitioning=partition_cols,
+            partitioning_flavor="hive",
             existing_data_behavior="overwrite_or_ignore",
-            file_options=pa.parquet.ParquetWriterOptions(compression=compression),
+            file_options=file_options,
         )
     else:
         file_path = output_dir / "data.parquet"
@@ -46,6 +50,6 @@ def write_parquet(
 
 def read_parquet(path: Path) -> pd.DataFrame:
     if path.is_dir():
-        dataset = ds.dataset(path, format="parquet")
+        dataset = ds.dataset(path, format="parquet", partitioning="hive")
         return dataset.to_table().to_pandas()
     return pd.read_parquet(path)
