@@ -1,0 +1,90 @@
+pipeline:
+  version: "0.1.0"
+
+paths:
+  geomag:
+    root: "地磁"
+    patterns:
+      - "*.min"
+      - "*.sec"
+  aef:
+    root: "大气电磁信号/大气电场/kak202001-202010daef.min"
+    patterns:
+      - "*.min"
+  seismic:
+    root: "地震波"
+    mseed_patterns:
+      - "*.mseed"
+      - "*.seed"
+    sac_patterns:
+      - "*.sac"
+    stationxml: "地震波/stations_inventory.xml"
+  vlf:
+    root: "大气电磁信号/电磁波动vlf/vlf"
+    patterns:
+      - "*.cdf"
+
+outputs:
+  root: "outputs"
+
+limits:
+  max_files_per_source: null
+  max_rows_per_source: null
+
+events:
+  - event_id: "eq_20200912_024411"
+    name: "2020-09-12 Japan"
+    origin_time_utc: "2020-09-12T02:44:11Z"
+    lat: 38.748
+    lon: 142.245
+    depth_km: 10.0
+    magnitude: 5.0
+
+time:
+  timezone: "UTC"
+  align_interval: "1min"
+  event_window:
+    pre_hours: 72
+    post_hours: 24
+  align_strategy:
+    geomag_sec: "aggregate"
+    geomag_min: "no_interpolate"
+    aef_min: "no_interpolate"
+    seismic_waveform: "feature_then_align"
+
+preprocess:
+  outlier:
+    method: "zscore"
+    threshold: 4.0
+  interpolate:
+    max_gap_minutes: 10
+    method: "linear"
+  filter:
+    enabled: true
+    method: "rolling_mean"
+    window: 5
+
+link:
+  spatial_km: 200
+  require_station_location: false
+
+features:
+  rolling_window_minutes: 30
+  topn_anomalies: 50
+
+vlf:
+  band_edges_hz: [10, 1000, 3000, 10000]
+  preview:
+    max_time_bins: 200
+    max_freq_bins: 200
+
+storage:
+  parquet:
+    compression: "zstd"
+    partition_cols: ["source"]
+  zarr:
+    compressor: "zstd"
+
+api:
+  host: "0.0.0.0"
+  port: 8000

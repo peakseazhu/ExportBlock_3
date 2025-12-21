@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Local config
+configs/local.yaml
+.env
+
+# Generated outputs
+outputs/
+logs/
+
+# Data sources (do not commit)
+地磁/
+地震波/
+大气电磁信号/
+
+# OS/editor
+.DS_Store
+Thumbs.db
