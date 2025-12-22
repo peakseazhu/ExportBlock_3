@@ -44,7 +44,9 @@ def run_link(
 
     interval = config.get("time", {}).get("align_interval", "1min")
     interval_ms = int(pd.Timedelta(interval).total_seconds() * 1000)
-    radius_km = float(config.get("link", {}).get("spatial_km", 200))
+    link_cfg = config.get("link", {}) or {}
+    radius_km = float(link_cfg.get("spatial_km", 200))
+    require_location = bool(link_cfg.get("require_station_location", False))
 
     sources = ["geomag", "aef", "seismic", "vlf"]
     aligned_frames = []
@@ -59,6 +61,10 @@ def run_link(
         df = df[(df["ts_ms"] >= int(start.value // 1_000_000)) & (df["ts_ms"] <= int(end.value // 1_000_000))]
         if df.empty:
             continue
+        if require_location:
+            df = df.dropna(subset=["lat", "lon"])
+            if df.empty:
+                continue
         df = _filter_by_distance(df, event["lat"], event["lon"], radius_km)
         if df.empty:
             continue

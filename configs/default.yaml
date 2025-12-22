@@ -37,8 +37,8 @@ events:
     origin_time_utc: "2020-09-12T02:44:11Z"
     lat: 38.748
     lon: 142.245
-    depth_km: 10.0
-    magnitude: 5.0
+    depth_km: 34.0
+    magnitude: 6.1
 
 time:
   timezone: "UTC"
@@ -65,7 +65,7 @@ preprocess:
     window: 5
 
 link:
-  spatial_km: 200
+  spatial_km: 1000
   require_station_location: false
 
 features:

@@ -240,7 +240,7 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 
 ### link
 #### link.spatial_km
-- 类型/必填/默认/范围：float，必填；默认 `200`；非负。
+- 类型/必填/默认/范围：float，必填；默认 `1000`；非负。
 - 作用与影响/读取位置：按震中距离过滤站点；`src/pipeline/link.py::run_link`。
 - 典型场景与示例：近场研究可设为 `50`。
 - 注意事项：过小会导致无站点匹配。
