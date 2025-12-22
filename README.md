@@ -58,6 +58,17 @@ The pipeline must follow the strict order:
 manifest -> ingest -> raw -> standard -> spatial -> link -> features -> model -> plots
 ```
 
+Stage meanings (short):
+- manifest: scan files and record manifest metadata.
+- ingest: parse raw files into structured tables (no event filtering).
+- raw: persist structured raw data for `/raw/query`.
+- standard: denoise/interpolate/filter and persist cleaned data.
+- spatial: build station index and spatial DQ.
+- link: event window + spatial join into linked dataset.
+- features: extract stats + signal features (including geomag gradients, VLF peaks, seismic arrival proxies).
+- model: score anomalies with z-score thresholds.
+- plots: generate Plotly figures for UI.
+
 Run all stages (demo):
 
 ```bash
@@ -66,8 +77,23 @@ python scripts/pipeline_run.py \
   --config configs/demo.yaml \
   --event_id eq_20200101_000000
 ```
-
+设定批大小
+PowerShell 
+```bash
+$env:PARQUET_BATCH_ROWS = "80000"
+python scripts/pipeline_run.py --stages manifest,ingest,raw,standard,spatial,link,features,model,plots --config configs/default.yaml --event_id eq_20200912_024411
+```
+cmd 用法：
+```bash
+set PARQUET_BATCH_ROWS=80000
+python scripts/pipeline_run.py --stages manifest,ingest,raw,standard,spatial,link,features,model,plots --config configs/default.yaml --event_id eq_20200912_024411
+```
 Finalize and bundle:
+
+```bash
+python scripts/finalize_event_package.py --event_id  eq_20200912_024411 --strict
+python scripts/make_event_bundle.py --event_id eq_20200912_024411
+```
 
 ```bash
 python scripts/finalize_event_package.py --event_id eq_20200101_000000 --strict
@@ -104,7 +130,8 @@ uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000
 Example queries:
 
 ```
-GET /raw/query?source=geomag&start=2020-01-01T00:00:00Z&end=2020-01-02T00:00:00Z
+GET /raw/summary?source=geomag
+GET /raw/query?source=geomag&start=2020-01-31&end=2020-02-01
 GET /standard/query?source=geomag&lat_min=30&lat_max=40&lon_min=130&lon_max=150
 GET /events
 GET /events/<event_id>/linked
@@ -113,6 +140,8 @@ GET /events/<event_id>/anomaly
 GET /events/<event_id>/plots?kind=aligned_timeseries
 GET /events/<event_id>/export?format=csv&start=...&end=...
 ```
+
+Time parameters (`start`/`end`) accept ISO8601, date-only (`YYYY-MM-DD`), or Unix epoch seconds/milliseconds.
 
 UI:
 - `GET /ui`

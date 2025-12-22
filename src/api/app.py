@@ -21,9 +21,17 @@ templates = Jinja2Templates(directory=str(ROOT / "templates"))
 
 
 def _parse_time(value: Optional[str]) -> Optional[int]:
-    if not value:
+    if value is None:
         return None
-    return int(pd.Timestamp(value).value // 1_000_000)
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.isdigit() and len(text) in (10, 13):
+        ts = int(text)
+        if len(text) == 10:
+            ts *= 1000
+        return ts
+    return int(pd.Timestamp(text).value // 1_000_000)
 
 
 def _filter_df(
@@ -98,6 +106,10 @@ def _summarize_df(df: pd.DataFrame) -> dict:
         summary["start_min_utc"] = _format_utc(df["starttime"].min())
         summary["end_max_utc"] = _format_utc(df["endtime"].max())
     return summary
+
+
+def _load_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 @app.get("/health")
@@ -277,6 +289,30 @@ def ui_event(request: Request, event_id: str):
     event_dir = OUTPUT_ROOT / "events" / event_id
     if not event_dir.exists():
         raise HTTPException(status_code=404, detail="event not found")
+    linked_summary = {}
+    event_meta = {}
+    summary_path = OUTPUT_ROOT / "linked" / event_id / "summary.json"
+    if summary_path.exists():
+        linked_summary = _load_json(summary_path)
+    event_path = OUTPUT_ROOT / "linked" / event_id / "event.json"
+    if event_path.exists():
+        event_meta = _load_json(event_path)
+    features_preview = []
+    features_total = 0
+    features_path = OUTPUT_ROOT / "features" / event_id / "features.parquet"
+    if features_path.exists():
+        df = pd.read_parquet(
+            features_path, columns=["source", "station_id", "channel", "feature", "value"]
+        )
+        features_total = int(len(df))
+        features_preview = df.head(50).to_dict(orient="records")
+    anomalies_preview = []
+    anomalies_total = 0
+    anomaly_path = OUTPUT_ROOT / "features" / event_id / "anomaly.parquet"
+    if anomaly_path.exists():
+        df = pd.read_parquet(anomaly_path, columns=["rank", "source", "station_id", "feature", "score"])
+        anomalies_total = int(len(df))
+        anomalies_preview = df.head(20).to_dict(orient="records")
     plots = {
         "aligned_timeseries": f"/outputs/plots/html/{event_id}/plot_aligned_timeseries.html",
         "station_map": f"/outputs/plots/html/{event_id}/plot_station_map.html",
@@ -285,5 +321,15 @@ def ui_event(request: Request, event_id: str):
     }
     return templates.TemplateResponse(
         "ui_event.html",
-        {"request": request, "event_id": event_id, "plots": plots},
+        {
+            "request": request,
+            "event_id": event_id,
+            "plots": plots,
+            "linked_summary": linked_summary,
+            "event_meta": event_meta,
+            "features_preview": features_preview,
+            "features_total": features_total,
+            "anomalies_preview": anomalies_preview,
+            "anomalies_total": anomalies_total,
+        },
     )

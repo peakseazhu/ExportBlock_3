@@ -19,6 +19,15 @@
 - `freq_hz`：频率轴
 - `ch1/ch2`：频谱功率（`V^2/Hz`）
 
+## Features 输出（示例）
+- 统计类：`mean`, `std`, `variance`, `min`, `max`, `peak`, `rms`, `count`
+- 地磁梯度：`gradient_abs_mean`, `gradient_abs_max`
+- 地震到时（近似）：`p_arrival_offset_s`, `s_arrival_offset_s`
+
+说明：
+- `p_arrival_offset_s` / `s_arrival_offset_s` 为简化估计值（相对震源时刻的秒偏移）。
+- VLF 峰值频率来自 standard 阶段的 `ch1_peak_freq` / `ch2_peak_freq`，在 features 中以统计特征体现。
+
 ## quality_flags 说明
 - `is_missing` / `missing_reason`
 - `is_interpolated` / `interp_method`

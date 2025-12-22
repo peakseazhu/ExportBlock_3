@@ -10,6 +10,16 @@
 - `GET /raw/summary?source=geomag|aef|seismic|vlf`：返回行数与时间范围（用于确认可查询时间窗）
 - `GET /standard/summary?source=geomag|aef|seismic|vlf`：返回行数与时间范围（用于确认可查询时间窗）
 
+时间参数说明：
+- 支持 ISO8601（如 `2020-01-31T22:40:00Z`）
+- 支持日期简写（如 `2020-01-31`）
+- 支持 Unix 时间戳（秒/毫秒，长度为 10 或 13）
+
+查询返回头（raw/standard）：
+- `X-Result-Count`：过滤后行数
+- `X-Source-Rows`：原始数据行数
+- `X-Source-Time-Range`：数据覆盖范围（UTC）
+
 ## 事件级
 - `GET /events`：事件列表（默认仅 READY）
 - `GET /events/{event_id}/linked`

@@ -17,7 +17,8 @@ def _write_plot(fig: go.Figure, spec_path: Path, html_path: Path) -> None:
     ensure_dir(spec_path.parent)
     ensure_dir(html_path.parent)
     spec_path.write_text(pio.to_json(fig), encoding="utf-8")
-    fig.write_html(str(html_path), include_plotlyjs="cdn")
+    config = {"responsive": True, "displaylogo": False, "scrollZoom": True}
+    fig.write_html(str(html_path), include_plotlyjs="cdn", config=config)
 
 
 def run_plots(
@@ -49,7 +50,13 @@ def run_plots(
         for channel in top_channels:
             subset = aligned_df[aligned_df["channel"] == channel].sort_values("ts")
             fig.add_trace(go.Scatter(x=subset["ts"], y=subset["value"], mode="lines", name=channel))
-        fig.update_layout(title="Aligned Timeseries", xaxis_title="Time (UTC)", yaxis_title="Value")
+        fig.update_xaxes(rangeslider_visible=True)
+        fig.update_layout(
+            title="Aligned Timeseries",
+            xaxis_title="Time (UTC)",
+            yaxis_title="Value",
+            height=520,
+        )
         _write_plot(fig, plots_spec_dir / "plot_aligned_timeseries.json", plots_html_dir / "plot_aligned_timeseries.html")
         dq["aligned_timeseries"] = "ok"
     else:
@@ -70,7 +77,7 @@ def run_plots(
                 mode="markers",
             )
         )
-        fig.update_layout(title="Station Map")
+        fig.update_layout(title="Station Map", height=520)
         _write_plot(fig, plots_spec_dir / "plot_station_map.json", plots_html_dir / "plot_station_map.html")
         dq["station_map"] = "ok"
     else:
@@ -86,7 +93,7 @@ def run_plots(
         fig = go.Figure()
         fig.add_trace(go.Bar(x=sources, y=before, name="before_std"))
         fig.add_trace(go.Bar(x=sources, y=after, name="after_std"))
-        fig.update_layout(title="Filter Effect", barmode="group", yaxis_title="Std")
+        fig.update_layout(title="Filter Effect", barmode="group", yaxis_title="Std", height=520)
         _write_plot(fig, plots_spec_dir / "plot_filter_effect.json", plots_html_dir / "plot_filter_effect.html")
         dq["filter_effect"] = "ok"
     else:
@@ -115,7 +122,9 @@ def run_plots(
                         colorscale="Viridis",
                     )
                 )
-                fig.update_layout(title="VLF Spectrogram (CH1)", xaxis_title="Time", yaxis_title="Freq (Hz)")
+                fig.update_layout(
+                    title="VLF Spectrogram (CH1)", xaxis_title="Time", yaxis_title="Freq (Hz)", height=520
+                )
                 _write_plot(
                     fig,
                     plots_spec_dir / "plot_vlf_spectrogram.json",

@@ -34,11 +34,18 @@
         margin: 12px 0 0;
         font-size: clamp(26px, 4vw, 40px);
       }
+      .meta,
       .grid {
         padding: 16px 10vw 60px;
         display: grid;
         gap: 20px;
         grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      }
+      .meta {
+        padding-bottom: 0;
+      }
+      .grid.plots {
+        grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
       }
       .card {
         background: var(--card);
@@ -46,26 +53,100 @@
         padding: 16px;
         box-shadow: 0 10px 26px rgba(27, 27, 31, 0.08);
         border: 1px solid rgba(27, 27, 31, 0.05);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
       }
       .card h2 {
         margin-top: 0;
         font-size: 18px;
       }
+      .muted {
+        color: var(--muted);
+        margin: 0;
+      }
+      .kv {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+      }
+      .kv div {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 10px;
+        font-size: 14px;
+      }
+      .kv dt {
+        font-weight: 600;
+        color: var(--muted);
+      }
+      .kv dd {
+        margin: 0;
+      }
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .chip {
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: rgba(217, 79, 47, 0.12);
+        color: var(--accent);
+        font-size: 12px;
+      }
+      .plot-actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .plot-actions a {
+        color: var(--accent);
+        text-decoration: none;
+        font-size: 13px;
+        font-weight: 600;
+      }
       iframe {
         width: 100%;
-        height: 320px;
+        height: min(70vh, 720px);
         border: none;
         border-radius: 12px;
         background: #fff;
+        flex: 1;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 8px 6px;
+        border-bottom: 1px solid rgba(27, 27, 31, 0.08);
+      }
+      th {
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .table-wrap {
+        max-height: 360px;
+        overflow: auto;
+        border: 1px solid rgba(27, 27, 31, 0.08);
+        border-radius: 12px;
       }
       @media (max-width: 640px) {
         header,
-        .grid {
+        .grid,
+        .meta {
           padding-left: 6vw;
           padding-right: 6vw;
         }
         iframe {
-          height: 260px;
+          height: 60vh;
+        }
+        .kv div {
+          grid-template-columns: 1fr;
         }
       }
     </style>
@@ -75,22 +156,165 @@
       <a href="/ui">← 返回列表</a>
       <h1>{{ event_id }}</h1>
     </header>
-    <section class="grid">
+    <section class="meta">
       <div class="card">
-        <h2>对齐时序</h2>
+        <h2>事件信息</h2>
+        {% if event_meta %}
+        <dl class="kv">
+          <div>
+            <dt>名称</dt>
+            <dd>{{ event_meta.name or "—" }}</dd>
+          </div>
+          <div>
+            <dt>发震时间</dt>
+            <dd>{{ event_meta.origin_time_utc }}</dd>
+          </div>
+          <div>
+            <dt>震中坐标</dt>
+            <dd>{{ event_meta.lat }}, {{ event_meta.lon }}</dd>
+          </div>
+          <div>
+            <dt>深度 / 震级</dt>
+            <dd>{{ event_meta.depth_km or "—" }} km / {{ event_meta.magnitude or "—" }}</dd>
+          </div>
+        </dl>
+        {% else %}
+        <p class="muted">暂无事件元数据。</p>
+        {% endif %}
+      </div>
+      <div class="card">
+        <h2>关联概览</h2>
+        {% if linked_summary %}
+        <dl class="kv">
+          <div>
+            <dt>时间窗</dt>
+            <dd>{{ linked_summary.time_window.start }} → {{ linked_summary.time_window.end }}</dd>
+          </div>
+          <div>
+            <dt>覆盖率</dt>
+            <dd>{{ linked_summary.join_coverage }}</dd>
+          </div>
+          <div>
+            <dt>对齐点数</dt>
+            <dd>{{ linked_summary.unique_bins }} / {{ linked_summary.expected_bins }}</dd>
+          </div>
+        </dl>
+        <div class="chips">
+          {% for key, value in linked_summary.sources.items() %}
+          <span class="chip">{{ key }}: {{ value }}</span>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted">暂无关联统计。</p>
+        {% endif %}
+      </div>
+      <div class="card">
+        <h2>特征 / 异常概览</h2>
+        <dl class="kv">
+          <div>
+            <dt>特征行数</dt>
+            <dd>{{ features_total }}</dd>
+          </div>
+          <div>
+            <dt>异常行数</dt>
+            <dd>{{ anomalies_total }}</dd>
+          </div>
+        </dl>
+        <p class="muted">特征与异常详情见下方表格。</p>
+      </div>
+    </section>
+    <section class="grid plots">
+      <div class="card">
+        <div class="plot-actions">
+          <h2>对齐时序</h2>
+          <a href="{{ plots.aligned_timeseries }}" target="_blank">新窗口打开</a>
+        </div>
         <iframe src="{{ plots.aligned_timeseries }}"></iframe>
       </div>
       <div class="card">
-        <h2>台站分布</h2>
+        <div class="plot-actions">
+          <h2>台站分布</h2>
+          <a href="{{ plots.station_map }}" target="_blank">新窗口打开</a>
+        </div>
         <iframe src="{{ plots.station_map }}"></iframe>
       </div>
       <div class="card">
-        <h2>滤波效果</h2>
+        <div class="plot-actions">
+          <h2>滤波效果</h2>
+          <a href="{{ plots.filter_effect }}" target="_blank">新窗口打开</a>
+        </div>
         <iframe src="{{ plots.filter_effect }}"></iframe>
       </div>
       <div class="card">
-        <h2>VLF 频谱</h2>
+        <div class="plot-actions">
+          <h2>VLF 频谱</h2>
+          <a href="{{ plots.vlf_spectrogram }}" target="_blank">新窗口打开</a>
+        </div>
         <iframe src="{{ plots.vlf_spectrogram }}"></iframe>
+      </div>
+    </section>
+    <section class="grid">
+      <div class="card">
+        <h2>特征预览（前 50 行）</h2>
+        {% if features_preview %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>source</th>
+                <th>station_id</th>
+                <th>channel</th>
+                <th>feature</th>
+                <th>value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in features_preview %}
+              <tr>
+                <td>{{ row.source }}</td>
+                <td>{{ row.station_id }}</td>
+                <td>{{ row.channel }}</td>
+                <td>{{ row.feature }}</td>
+                <td>{{ row.value }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="muted">暂无特征数据。</p>
+        {% endif %}
+      </div>
+      <div class="card">
+        <h2>异常预览（前 20 行）</h2>
+        {% if anomalies_preview %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>rank</th>
+                <th>source</th>
+                <th>station_id</th>
+                <th>feature</th>
+                <th>score</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in anomalies_preview %}
+              <tr>
+                <td>{{ row.rank }}</td>
+                <td>{{ row.source }}</td>
+                <td>{{ row.station_id }}</td>
+                <td>{{ row.feature }}</td>
+                <td>{{ row.score }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <p class="muted">暂无异常数据或未触发阈值。</p>
+        {% endif %}
       </div>
     </section>
   </body>
