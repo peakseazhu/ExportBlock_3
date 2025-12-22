@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -26,7 +26,7 @@ def _parse_time(value: Optional[str]) -> Optional[int]:
     return int(pd.Timestamp(value).value // 1_000_000)
 
 
-def _query_df(
+def _filter_df(
     df: pd.DataFrame,
     start: Optional[str],
     end: Optional[str],
@@ -38,7 +38,7 @@ def _query_df(
     limit: int,
 ):
     if df.empty:
-        return []
+        return df
     start_ms = _parse_time(start)
     end_ms = _parse_time(end)
     if start_ms is not None:
@@ -57,7 +57,47 @@ def _query_df(
         df = df[df["lon"] <= lon_max]
     if limit:
         df = df.head(limit)
-    return df.to_dict(orient="records")
+    return df
+
+
+def _query_df(
+    df: pd.DataFrame,
+    start: Optional[str],
+    end: Optional[str],
+    station_id: Optional[str],
+    lat_min: Optional[float],
+    lat_max: Optional[float],
+    lon_min: Optional[float],
+    lon_max: Optional[float],
+    limit: int,
+):
+    return _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit).to_dict(
+        orient="records"
+    )
+
+
+def _format_utc(value: pd.Timestamp) -> str:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.isoformat().replace("+00:00", "Z")
+
+
+def _summarize_df(df: pd.DataFrame) -> dict:
+    summary = {"rows": int(len(df)), "columns": list(df.columns)}
+    if df.empty:
+        return summary
+    if "ts_ms" in df.columns:
+        ts_min = pd.to_datetime(df["ts_ms"].min(), unit="ms", utc=True)
+        ts_max = pd.to_datetime(df["ts_ms"].max(), unit="ms", utc=True)
+        summary["ts_min_utc"] = _format_utc(ts_min)
+        summary["ts_max_utc"] = _format_utc(ts_max)
+    if "starttime" in df.columns and "endtime" in df.columns:
+        summary["start_min_utc"] = _format_utc(df["starttime"].min())
+        summary["end_max_utc"] = _format_utc(df["endtime"].max())
+    return summary
 
 
 @app.get("/health")
@@ -76,12 +116,24 @@ def raw_query(
     lon_min: Optional[float] = None,
     lon_max: Optional[float] = None,
     limit: int = 5000,
+    response: Response = None,
 ):
     source_path = OUTPUT_ROOT / "raw" / source
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
     df = read_parquet(source_path)
-    return _query_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
+    summary = _summarize_df(df)
+    filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
+    if response is not None:
+        response.headers["X-Result-Count"] = str(len(filtered))
+        response.headers["X-Source-Rows"] = str(summary["rows"])
+        if summary.get("ts_min_utc") and summary.get("ts_max_utc"):
+            response.headers["X-Source-Time-Range"] = f"{summary['ts_min_utc']}..{summary['ts_max_utc']}"
+        elif summary.get("start_min_utc") and summary.get("end_max_utc"):
+            response.headers["X-Source-Time-Range"] = (
+                f"{summary['start_min_utc']}..{summary['end_max_utc']}"
+            )
+    return filtered.to_dict(orient="records")
 
 
 @app.get("/standard/query")
@@ -95,12 +147,48 @@ def standard_query(
     lon_min: Optional[float] = None,
     lon_max: Optional[float] = None,
     limit: int = 5000,
+    response: Response = None,
 ):
     source_path = OUTPUT_ROOT / "standard" / source
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
     df = read_parquet(source_path)
-    return _query_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
+    summary = _summarize_df(df)
+    filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
+    if response is not None:
+        response.headers["X-Result-Count"] = str(len(filtered))
+        response.headers["X-Source-Rows"] = str(summary["rows"])
+        if summary.get("ts_min_utc") and summary.get("ts_max_utc"):
+            response.headers["X-Source-Time-Range"] = f"{summary['ts_min_utc']}..{summary['ts_max_utc']}"
+        elif summary.get("start_min_utc") and summary.get("end_max_utc"):
+            response.headers["X-Source-Time-Range"] = (
+                f"{summary['start_min_utc']}..{summary['end_max_utc']}"
+            )
+    return filtered.to_dict(orient="records")
+
+
+@app.get("/raw/summary")
+def raw_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
+    source_path = OUTPUT_ROOT / "raw" / source
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
+    df = read_parquet(source_path)
+    summary = _summarize_df(df)
+    summary["source"] = source
+    summary["stage"] = "raw"
+    return summary
+
+
+@app.get("/standard/summary")
+def standard_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
+    source_path = OUTPUT_ROOT / "standard" / source
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
+    df = read_parquet(source_path)
+    summary = _summarize_df(df)
+    summary["source"] = source
+    summary["stage"] = "standard"
+    return summary
 
 
 @app.get("/events")

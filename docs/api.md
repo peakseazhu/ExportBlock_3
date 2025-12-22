@@ -2,10 +2,13 @@
 
 ## 基础
 - `GET /health`：健康检查
+- 提示：`0.0.0.0` 仅是服务绑定地址，浏览器访问建议使用 `http://127.0.0.1:8000/docs`
 
 ## Raw/Standard 查询
 - `GET /raw/query?source=geomag|aef|seismic|vlf&start=<ISO>&end=<ISO>&station_id=<id>&lat_min=&lat_max=&lon_min=&lon_max=&limit=5000`
 - `GET /standard/query?source=geomag|aef|seismic|vlf&start=<ISO>&end=<ISO>&station_id=<id>&lat_min=&lat_max=&lon_min=&lon_max=&limit=5000`
+- `GET /raw/summary?source=geomag|aef|seismic|vlf`：返回行数与时间范围（用于确认可查询时间窗）
+- `GET /standard/summary?source=geomag|aef|seismic|vlf`：返回行数与时间范围（用于确认可查询时间窗）
 
 ## 事件级
 - `GET /events`：事件列表（默认仅 READY）
