@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import List, Optional
 
@@ -36,6 +37,15 @@ def _resolve_batch_rows(batch_rows: Optional[int]) -> int:
     return 0
 
 
+def _partition_dir(base: Path, partition_cols: List[str], key) -> Path:
+    if not isinstance(key, tuple):
+        key = (key,)
+    part_dir = base
+    for col, value in zip(partition_cols, key):
+        part_dir = part_dir / f"{col}={value}"
+    return part_dir
+
+
 def _write_parquet_batched(
     df: pd.DataFrame,
     output_dir: Path,
@@ -50,19 +60,27 @@ def _write_parquet_batched(
         return
 
     if partition_cols:
-        file_options = ds.ParquetFileFormat().make_write_options(compression=compression)
-        for batch in _iter_batches(df, batch_rows):
-            batch = _normalize_flags(batch)
-            table = pa.Table.from_pandas(batch)
-            ds.write_dataset(
-                table,
-                output_dir,
-                format="parquet",
-                partitioning=partition_cols,
-                partitioning_flavor="hive",
-                existing_data_behavior="overwrite_or_ignore",
-                file_options=file_options,
-            )
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        ensure_dir(output_dir)
+        writers = {}
+        try:
+            for batch in _iter_batches(df, batch_rows):
+                batch = _normalize_flags(batch)
+                grouped = batch.groupby(partition_cols)
+                for key, group in grouped:
+                    part_dir = _partition_dir(output_dir, partition_cols, key)
+                    ensure_dir(part_dir)
+                    table = pa.Table.from_pandas(group)
+                    writer = writers.get(part_dir)
+                    if writer is None:
+                        file_path = part_dir / "data.parquet"
+                        writer = pq.ParquetWriter(file_path, table.schema, compression=compression)
+                        writers[part_dir] = writer
+                    writer.write_table(table)
+        finally:
+            for writer in writers.values():
+                writer.close()
         return
 
     file_path = output_dir / "data.parquet"
