@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import List, Optional
 
@@ -21,31 +22,97 @@ def _normalize_flags(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _iter_batches(df: pd.DataFrame, batch_rows: int):
+    for start in range(0, len(df), batch_rows):
+        yield df.iloc[start : start + batch_rows]
+
+
+def _resolve_batch_rows(batch_rows: Optional[int]) -> int:
+    if batch_rows is not None:
+        return int(batch_rows)
+    env_value = os.getenv("PARQUET_BATCH_ROWS")
+    if env_value:
+        return int(env_value)
+    return 0
+
+
+def _write_parquet_batched(
+    df: pd.DataFrame,
+    output_dir: Path,
+    partition_cols: Optional[List[str]],
+    compression: str,
+    batch_rows: int,
+) -> None:
+    if df.empty:
+        file_path = output_dir / "data.parquet"
+        table = pa.Table.from_pandas(df)
+        pq.write_table(table, file_path, compression=compression)
+        return
+
+    if partition_cols:
+        file_options = ds.ParquetFileFormat().make_write_options(compression=compression)
+        for batch in _iter_batches(df, batch_rows):
+            batch = _normalize_flags(batch)
+            table = pa.Table.from_pandas(batch)
+            ds.write_dataset(
+                table,
+                output_dir,
+                format="parquet",
+                partitioning=partition_cols,
+                partitioning_flavor="hive",
+                existing_data_behavior="overwrite_or_ignore",
+                file_options=file_options,
+            )
+        return
+
+    file_path = output_dir / "data.parquet"
+    writer = None
+    try:
+        for batch in _iter_batches(df, batch_rows):
+            batch = _normalize_flags(batch)
+            table = pa.Table.from_pandas(batch)
+            if writer is None:
+                writer = pq.ParquetWriter(file_path, table.schema, compression=compression)
+            writer.write_table(table)
+    finally:
+        if writer is not None:
+            writer.close()
+
+
 def write_parquet(
     df: pd.DataFrame,
     output_dir: Path,
     partition_cols: Optional[List[str]] = None,
     compression: str = "zstd",
+    batch_rows: Optional[int] = None,
 ) -> None:
     ensure_dir(output_dir)
-    df = _normalize_flags(df)
     if partition_cols and not set(partition_cols).issubset(df.columns):
         partition_cols = None
-    table = pa.Table.from_pandas(df)
-    if partition_cols:
-        file_options = ds.ParquetFileFormat().make_write_options(compression=compression)
-        ds.write_dataset(
-            table,
-            output_dir,
-            format="parquet",
-            partitioning=partition_cols,
-            partitioning_flavor="hive",
-            existing_data_behavior="overwrite_or_ignore",
-            file_options=file_options,
-        )
-    else:
-        file_path = output_dir / "data.parquet"
-        pq.write_table(table, file_path, compression=compression)
+    batch_rows = _resolve_batch_rows(batch_rows)
+    if batch_rows > 0:
+        _write_parquet_batched(df, output_dir, partition_cols, compression, batch_rows)
+        return
+
+    try:
+        normalized = _normalize_flags(df)
+        table = pa.Table.from_pandas(normalized)
+        if partition_cols:
+            file_options = ds.ParquetFileFormat().make_write_options(compression=compression)
+            ds.write_dataset(
+                table,
+                output_dir,
+                format="parquet",
+                partitioning=partition_cols,
+                partitioning_flavor="hive",
+                existing_data_behavior="overwrite_or_ignore",
+                file_options=file_options,
+            )
+        else:
+            file_path = output_dir / "data.parquet"
+            pq.write_table(table, file_path, compression=compression)
+    except (pa.ArrowMemoryError, MemoryError):
+        _write_parquet_batched(df, output_dir, partition_cols, compression, 200_000)
 
 
 def read_parquet(path: Path) -> pd.DataFrame:
