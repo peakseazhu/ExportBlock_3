@@ -64,8 +64,8 @@ python scripts/pipeline_run.py   --stages manifest,ingest,raw,standard,spatial,l
 ```
 manifest：扫描数据文件并生成清单（审计/可追溯），写入 outputs/manifests。
 ingest：解析原始数据为结构化表；IAGA/AEF/地震索引写入 outputs/ingest，VLF 频谱写入 outputs/raw/vlf。
-raw：把 ingest 数据标记为 raw 并写入 outputs/raw，同时复制波形文件。
-standard：清洗/插值/滤波并生成标准化表，写入 outputs/standard。
+raw：把 ingest 数据标记为 raw 并按 station/date 分区写入 outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet，同时复制波形文件。
+standard：清洗/插值/滤波并生成标准化表，按相同分区写入 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet。
 spatial：生成站点空间索引与报告，写入 outputs/reports/spatial_index。
 link：按事件窗口与空间半径对齐/筛选，写入 outputs/linked/<event_id>。
 features：统计特征（mean/std/min/max/rms 等），写入 outputs/features/<event_id>。
@@ -94,8 +94,9 @@ python scripts/make_event_bundle.py --event_id eq_20200101_000000
 ```
 outputs/manifests/                             # manifest json
 outputs/ingest/                                # ingest parquet
-outputs/raw/                                   # raw parquet + vlf catalog
-outputs/standard/                              # cleaned parquet
+outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
+outputs/raw/vlf_catalog.parquet
+outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
 outputs/linked/<event_id>/aligned.parquet
 outputs/features/<event_id>/features.parquet
 outputs/features/<event_id>/anomaly.parquet

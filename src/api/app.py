@@ -121,13 +121,6 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _resolve_source_path(stage: str, source: str) -> Path:
-    source_dir = OUTPUT_ROOT / stage / f"source={source}"
-    if source_dir.exists():
-        return source_dir
-    return OUTPUT_ROOT / stage / source
-
-
 def _build_partition_filter(
     source_path: Path,
     start_ms: Optional[int],
@@ -173,7 +166,7 @@ def raw_query(
     limit: int = 5000,
     response: Response = None,
 ):
-    source_path = _resolve_source_path("raw", source)
+    source_path = OUTPUT_ROOT / "raw" / f"source={source}"
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
     start_ms = _parse_time(start)
@@ -209,7 +202,7 @@ def standard_query(
     limit: int = 5000,
     response: Response = None,
 ):
-    source_path = _resolve_source_path("standard", source)
+    source_path = OUTPUT_ROOT / "standard" / f"source={source}"
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
     start_ms = _parse_time(start)
@@ -234,7 +227,7 @@ def standard_query(
 
 @app.get("/raw/summary")
 def raw_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
-    source_path = _resolve_source_path("raw", source)
+    source_path = OUTPUT_ROOT / "raw" / f"source={source}"
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
     df = read_parquet_filtered(source_path, columns=["ts_ms", "starttime", "endtime"])
@@ -246,7 +239,7 @@ def raw_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
 
 @app.get("/standard/summary")
 def standard_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
-    source_path = _resolve_source_path("standard", source)
+    source_path = OUTPUT_ROOT / "standard" / f"source={source}"
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
     df = read_parquet_filtered(source_path, columns=["ts_ms", "starttime", "endtime"])

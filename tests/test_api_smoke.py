@@ -6,13 +6,13 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from src.store.parquet import write_parquet
+from src.store.parquet import write_parquet_partitioned
 
 @pytest.mark.smoke
 def test_api_smoke(tmp_path: Path):
     output_root = tmp_path / "outputs"
-    raw_dir = output_root / "raw" / "geomag"
-    standard_dir = output_root / "standard" / "geomag"
+    raw_dir = output_root / "raw" / "source=geomag"
+    standard_dir = output_root / "standard" / "source=geomag"
     raw_dir.mkdir(parents=True, exist_ok=True)
     standard_dir.mkdir(parents=True, exist_ok=True)
 
@@ -31,8 +31,9 @@ def test_api_smoke(tmp_path: Path):
             }
         ]
     )
-    write_parquet(df, raw_dir, partition_cols=None)
-    write_parquet(df, standard_dir, partition_cols=None)
+    config = {"storage": {"parquet": {"partition_cols": ["station_id", "date"], "batch_rows": 100000}}}
+    write_parquet_partitioned(df, raw_dir, config)
+    write_parquet_partitioned(df, standard_dir, config)
 
     os.environ["OUTPUT_ROOT"] = str(output_root)
     import src.api.app as app_module
