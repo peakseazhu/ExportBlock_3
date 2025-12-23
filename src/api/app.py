@@ -4,12 +4,13 @@ from pathlib import Path
 from typing import Optional
 
 import pandas as pd
+import pyarrow.dataset as ds
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from src.store.parquet import read_parquet
+from src.store.parquet import read_parquet_filtered
 
 ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_ROOT = Path(os.getenv("OUTPUT_ROOT", ROOT / "outputs"))
@@ -49,10 +50,18 @@ def _filter_df(
         return df
     start_ms = _parse_time(start)
     end_ms = _parse_time(end)
-    if start_ms is not None:
-        df = df[df["ts_ms"] >= start_ms]
-    if end_ms is not None:
-        df = df[df["ts_ms"] <= end_ms]
+    if "ts_ms" in df.columns:
+        if start_ms is not None:
+            df = df[df["ts_ms"] >= start_ms]
+        if end_ms is not None:
+            df = df[df["ts_ms"] <= end_ms]
+    elif "starttime" in df.columns and "endtime" in df.columns:
+        start_ts = pd.to_datetime(start_ms, unit="ms", utc=True) if start_ms is not None else None
+        end_ts = pd.to_datetime(end_ms, unit="ms", utc=True) if end_ms is not None else None
+        if start_ts is not None:
+            df = df[df["endtime"] >= start_ts]
+        if end_ts is not None:
+            df = df[df["starttime"] <= end_ts]
     if station_id:
         df = df[df["station_id"] == station_id]
     if lat_min is not None and "lat" in df.columns:
@@ -112,6 +121,40 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _resolve_source_path(stage: str, source: str) -> Path:
+    source_dir = OUTPUT_ROOT / stage / f"source={source}"
+    if source_dir.exists():
+        return source_dir
+    return OUTPUT_ROOT / stage / source
+
+
+def _build_partition_filter(
+    source_path: Path,
+    start_ms: Optional[int],
+    end_ms: Optional[int],
+    station_id: Optional[str],
+) -> Optional[ds.Expression]:
+    if not source_path.exists():
+        return None
+    dataset = ds.dataset(source_path, format="parquet", partitioning="hive")
+    fields = set(dataset.schema.names)
+    expr = None
+    if station_id and "station_id" in fields:
+        expr = ds.field("station_id") == station_id
+    if (start_ms is not None or end_ms is not None) and "date" in fields:
+        start_date = (
+            pd.to_datetime(start_ms, unit="ms", utc=True).strftime("%Y-%m-%d") if start_ms is not None else None
+        )
+        end_date = (
+            pd.to_datetime(end_ms, unit="ms", utc=True).strftime("%Y-%m-%d") if end_ms is not None else None
+        )
+        if start_date:
+            expr = (expr & (ds.field("date") >= start_date)) if expr is not None else ds.field("date") >= start_date
+        if end_date:
+            expr = (expr & (ds.field("date") <= end_date)) if expr is not None else ds.field("date") <= end_date
+    return expr
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -130,11 +173,16 @@ def raw_query(
     limit: int = 5000,
     response: Response = None,
 ):
-    source_path = OUTPUT_ROOT / "raw" / source
+    source_path = _resolve_source_path("raw", source)
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
-    df = read_parquet(source_path)
-    summary = _summarize_df(df)
+    start_ms = _parse_time(start)
+    end_ms = _parse_time(end)
+    filters = _build_partition_filter(source_path, start_ms, end_ms, station_id)
+    df = read_parquet_filtered(source_path, filters=filters)
+    summary = _summarize_df(
+        read_parquet_filtered(source_path, filters=filters, columns=["ts_ms", "starttime", "endtime"])
+    )
     filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
     if response is not None:
         response.headers["X-Result-Count"] = str(len(filtered))
@@ -161,11 +209,16 @@ def standard_query(
     limit: int = 5000,
     response: Response = None,
 ):
-    source_path = OUTPUT_ROOT / "standard" / source
+    source_path = _resolve_source_path("standard", source)
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
-    df = read_parquet(source_path)
-    summary = _summarize_df(df)
+    start_ms = _parse_time(start)
+    end_ms = _parse_time(end)
+    filters = _build_partition_filter(source_path, start_ms, end_ms, station_id)
+    df = read_parquet_filtered(source_path, filters=filters)
+    summary = _summarize_df(
+        read_parquet_filtered(source_path, filters=filters, columns=["ts_ms", "starttime", "endtime"])
+    )
     filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
     if response is not None:
         response.headers["X-Result-Count"] = str(len(filtered))
@@ -181,10 +234,10 @@ def standard_query(
 
 @app.get("/raw/summary")
 def raw_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
-    source_path = OUTPUT_ROOT / "raw" / source
+    source_path = _resolve_source_path("raw", source)
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
-    df = read_parquet(source_path)
+    df = read_parquet_filtered(source_path, columns=["ts_ms", "starttime", "endtime"])
     summary = _summarize_df(df)
     summary["source"] = source
     summary["stage"] = "raw"
@@ -193,10 +246,10 @@ def raw_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
 
 @app.get("/standard/summary")
 def standard_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
-    source_path = OUTPUT_ROOT / "standard" / source
+    source_path = _resolve_source_path("standard", source)
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
-    df = read_parquet(source_path)
+    df = read_parquet_filtered(source_path, columns=["ts_ms", "starttime", "endtime"])
     summary = _summarize_df(df)
     summary["source"] = source
     summary["stage"] = "standard"

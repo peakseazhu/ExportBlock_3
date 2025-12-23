@@ -79,7 +79,7 @@ vlf:
 storage:
   parquet:
     compression: "zstd"
-    partition_cols: ["source"]
+    partition_cols: ["station_id", "date"]
     batch_rows: 20000
   zarr:
     compressor: "zstd"

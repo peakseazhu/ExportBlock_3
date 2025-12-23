@@ -171,7 +171,7 @@ def run_ingest(
 
     if vlf_records:
         vlf_catalog = pd.DataFrame.from_records(vlf_records)
-        write_parquet_configured(vlf_catalog, output_paths.raw / "vlf_catalog", config, partition_cols=None)
+        write_parquet_configured(vlf_catalog, output_paths.raw / "vlf_catalog.parquet", config, partition_cols=None)
         sample = vlf_records[0]
         dq_vlf = {
             "files": len(vlf_records),

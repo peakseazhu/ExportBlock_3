@@ -10,13 +10,11 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 from obspy import read
-import pyarrow as pa
 import pyarrow.dataset as ds
-import pyarrow.parquet as pq
 import zarr
 
 from src.dq.reporting import basic_stats, write_dq_report
-from src.store.parquet import read_parquet, write_parquet_configured
+from src.store.parquet import read_parquet, write_parquet_partitioned
 from src.utils import ensure_dir, write_json
 
 
@@ -33,10 +31,6 @@ def _parse_flags(series: pd.Series) -> List[Dict[str, Any]]:
         else:
             parsed.append({})
     return parsed
-
-
-def _serialize_flags(series: pd.Series) -> pd.Series:
-    return series.apply(lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, dict) else x)
 
 
 def _resolve_preprocess_batch_rows(config: Dict[str, Any]) -> int:
@@ -176,7 +170,7 @@ def _seismic_features(
     interval_sec = 60
     records: List[Dict[str, Any]] = []
     trace_index = None
-    trace_index_path = raw_dir / "seismic"
+    trace_index_path = raw_dir / "source=seismic"
     if trace_index_path.exists():
         trace_index = read_parquet(trace_index_path)
 
@@ -318,22 +312,6 @@ def _vlf_features(config: Dict[str, Any], raw_dir: Path, max_rows: int | None, p
     return df
 
 
-def _write_parquet_batch(
-    writer: pq.ParquetWriter | None,
-    df: pd.DataFrame,
-    file_path: Path,
-    compression: str,
-) -> pq.ParquetWriter:
-    df = df.copy()
-    if "quality_flags" in df.columns:
-        df["quality_flags"] = _serialize_flags(df["quality_flags"])
-    table = pa.Table.from_pandas(df)
-    if writer is None:
-        writer = pq.ParquetWriter(file_path, table.schema, compression=compression)
-    writer.write_table(table)
-    return writer
-
-
 def _process_standard_source(
     source: str,
     raw_path: Path,
@@ -361,15 +339,10 @@ def _process_standard_source(
         if stats["count"] > 0
     }
 
-    output_base = output_paths.standard / source
+    output_base = output_paths.standard / f"source={source}"
     if output_base.exists():
         shutil.rmtree(output_base)
-    partition_dir = output_base / f"source={source}"
-    ensure_dir(partition_dir)
-    file_path = partition_dir / "data.parquet"
-
-    parquet_cfg = (config.get("storage") or {}).get("parquet") or {}
-    compression = parquet_cfg.get("compression", "zstd")
+    ensure_dir(output_base)
 
     report = {
         "rows": 0,
@@ -386,7 +359,7 @@ def _process_standard_source(
     after_stats = {"count": 0, "sum": 0.0, "sum_sq": 0.0}
 
     tails: Dict[Tuple[str, str], pd.DataFrame] = {}
-    writer: pq.ParquetWriter | None = None
+    part_counters: Dict[Path, int] = {}
     seen = 0
     scanner = dataset.scanner(
         columns=[
@@ -428,11 +401,11 @@ def _process_standard_source(
                 mean, std = mean_std.get(key, (None, None))
                 cleaned, before_values = _clean_timeseries_group(combined_raw, config, mean, std)
                 if overlap > 0 and len(cleaned) > overlap:
-                    to_write = cleaned.iloc[:-overlap]
+                    to_write = cleaned.iloc[:-overlap].copy()
                     before_values = before_values[:-overlap]
                     tails[key] = combined_raw.iloc[-overlap:].copy()
                 else:
-                    to_write = cleaned
+                    to_write = cleaned.copy()
                     tails[key] = combined_raw.iloc[0:0].copy()
 
                 if to_write.empty:
@@ -461,7 +434,12 @@ def _process_standard_source(
                 after_vals = after_vals[~np.isnan(after_vals)]
                 _update_sum_stats(after_stats, after_vals)
 
-                writer = _write_parquet_batch(writer, to_write, file_path, compression)
+                part_counters = write_parquet_partitioned(
+                    to_write,
+                    output_base,
+                    config,
+                    part_counters=part_counters,
+                )
             gc.collect()
 
         for key, tail_raw in tails.items():
@@ -471,6 +449,7 @@ def _process_standard_source(
             cleaned, before_values = _clean_timeseries_group(tail_raw, config, mean, std)
             if cleaned.empty:
                 continue
+            cleaned = cleaned.copy()
             cleaned["proc_stage"] = "standard"
             cleaned["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
             cleaned["params_hash"] = params_hash
@@ -491,10 +470,14 @@ def _process_standard_source(
             after_vals = cleaned["value"].to_numpy(dtype=float, copy=False)
             after_vals = after_vals[~np.isnan(after_vals)]
             _update_sum_stats(after_stats, after_vals)
-            writer = _write_parquet_batch(writer, cleaned, file_path, compression)
+            part_counters = write_parquet_partitioned(
+                cleaned,
+                output_base,
+                config,
+                part_counters=part_counters,
+            )
     finally:
-        if writer is not None:
-            writer.close()
+        pass
 
     report["station_count"] = int(len(station_ids))
     report["missing_rate"] = float(missing_count / report["rows"]) if report["rows"] else None
@@ -518,7 +501,7 @@ def run_standard(
     reports = {}
     filter_reports = {}
 
-    geomag_raw = output_paths.raw / "geomag"
+    geomag_raw = output_paths.raw / "source=geomag"
     if geomag_raw.exists():
         report, filter_effect = _process_standard_source(
             "geomag", geomag_raw, output_paths, config, params_hash, max_rows
@@ -527,7 +510,7 @@ def run_standard(
             reports["geomag"] = report
             filter_reports["geomag"] = filter_effect
 
-    aef_raw = output_paths.raw / "aef"
+    aef_raw = output_paths.raw / "source=aef"
     if aef_raw.exists():
         report, filter_effect = _process_standard_source(
             "aef", aef_raw, output_paths, config, params_hash, max_rows
@@ -538,12 +521,18 @@ def run_standard(
 
     seismic_df = _seismic_features(base_dir, config, output_paths.raw, max_rows, params_hash)
     if not seismic_df.empty:
-        write_parquet_configured(seismic_df, output_paths.standard / "seismic", config, partition_cols=["source"])
+        seismic_dir = output_paths.standard / "source=seismic"
+        if seismic_dir.exists():
+            shutil.rmtree(seismic_dir)
+        write_parquet_partitioned(seismic_df, seismic_dir, config)
         reports["seismic"] = basic_stats(seismic_df)
 
     vlf_df = _vlf_features(config, output_paths.raw, max_rows, params_hash)
     if not vlf_df.empty:
-        write_parquet_configured(vlf_df, output_paths.standard / "vlf", config, partition_cols=["source"])
+        vlf_dir = output_paths.standard / "source=vlf"
+        if vlf_dir.exists():
+            shutil.rmtree(vlf_dir)
+        write_parquet_partitioned(vlf_df, vlf_dir, config)
         reports["vlf"] = basic_stats(vlf_df)
 
     write_dq_report(output_paths.reports / "dq_standard.json", {"sources": reports})

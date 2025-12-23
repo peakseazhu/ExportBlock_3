@@ -7,7 +7,7 @@ from typing import Any, Dict
 import pandas as pd
 
 from src.dq.reporting import basic_stats, write_dq_report
-from src.store.parquet import read_parquet, write_parquet_configured
+from src.store.parquet import read_parquet, write_parquet_partitioned
 from src.utils import ensure_dir, write_json
 
 
@@ -38,7 +38,10 @@ def run_raw(
         geomag_df["proc_stage"] = "raw"
         geomag_df["proc_version"] = pipeline_version
         geomag_df["params_hash"] = params_hash
-        write_parquet_configured(geomag_df, output_paths.raw / "geomag", config, partition_cols=["source"])
+        geomag_dir = output_paths.raw / "source=geomag"
+        if geomag_dir.exists():
+            shutil.rmtree(geomag_dir)
+        write_parquet_partitioned(geomag_df, geomag_dir, config)
         stats["geomag"] = basic_stats(geomag_df)
 
     # AEF
@@ -48,17 +51,25 @@ def run_raw(
         aef_df["proc_stage"] = "raw"
         aef_df["proc_version"] = pipeline_version
         aef_df["params_hash"] = params_hash
-        write_parquet_configured(aef_df, output_paths.raw / "aef", config, partition_cols=["source"])
+        aef_dir = output_paths.raw / "source=aef"
+        if aef_dir.exists():
+            shutil.rmtree(aef_dir)
+        write_parquet_partitioned(aef_df, aef_dir, config)
         stats["aef"] = basic_stats(aef_df)
 
     # Seismic trace index + raw files
     seismic_ingest = output_paths.ingest / "seismic"
     if seismic_ingest.exists():
         trace_df = read_parquet(seismic_ingest)
+        if not trace_df.empty and "source" not in trace_df.columns:
+            trace_df["source"] = "seismic"
         trace_df["proc_stage"] = "raw"
         trace_df["proc_version"] = pipeline_version
         trace_df["params_hash"] = params_hash
-        write_parquet_configured(trace_df, output_paths.raw / "seismic", config, partition_cols=None)
+        seismic_dir = output_paths.raw / "source=seismic"
+        if seismic_dir.exists():
+            shutil.rmtree(seismic_dir)
+        write_parquet_partitioned(trace_df, seismic_dir, config)
         stats["seismic"] = {
             "trace_count": int(len(trace_df)),
             "station_count": int(trace_df["station"].nunique()) if not trace_df.empty else 0,
@@ -72,7 +83,7 @@ def run_raw(
         _copy_files(seismic_root, raw_seismic_files, ["*.mseed", "*.seed", "*.sac", "*.xml"])
 
     # VLF data already stored by ingest; ensure catalog available
-    vlf_catalog = output_paths.raw / "vlf_catalog"
+    vlf_catalog = output_paths.raw / "vlf_catalog.parquet"
     if vlf_catalog.exists():
         vlf_df = read_parquet(vlf_catalog)
         stats["vlf"] = {
@@ -85,7 +96,7 @@ def run_raw(
     # Compression stats (simple size ratio)
     compression = {}
     for source, report in stats.items():
-        source_path = output_paths.raw / source
+        source_path = output_paths.raw / f"source={source}"
         if source_path.exists():
             total_bytes = sum(p.stat().st_size for p in source_path.rglob("*") if p.is_file())
             compression[source] = {"bytes": total_bytes}

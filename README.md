@@ -118,8 +118,9 @@ Key outputs:
 ```
 outputs/manifests/                             # manifest json
 outputs/ingest/                                # ingest parquet
-outputs/raw/                                   # raw parquet + vlf catalog
-outputs/standard/                              # cleaned parquet
+outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
+outputs/raw/vlf_catalog.parquet
+outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
 outputs/linked/<event_id>/aligned.parquet
 outputs/features/<event_id>/features.parquet
 outputs/features/<event_id>/anomaly.parquet

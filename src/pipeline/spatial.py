@@ -47,7 +47,7 @@ def run_spatial(
     event_id: str | None,
 ) -> None:
     stations = []
-    seismic_raw = output_paths.raw / "seismic"
+    seismic_raw = output_paths.raw / "source=seismic"
     if seismic_raw.exists():
         trace_df = read_parquet(seismic_raw)
         if not trace_df.empty:

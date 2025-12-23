@@ -6,10 +6,11 @@ from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
+import pyarrow.dataset as ds
 
 from src.config import get_event
 from src.pipeline.spatial import haversine_km
-from src.store.parquet import read_parquet
+from src.store.parquet import read_parquet_filtered
 from src.utils import ensure_dir, write_json
 
 
@@ -51,14 +52,14 @@ def run_link(
     sources = ["geomag", "aef", "seismic", "vlf"]
     aligned_frames = []
     stations_summary = []
+    start_ms = int(start.value // 1_000_000)
+    end_ms = int(end.value // 1_000_000)
     for source in sources:
-        source_path = output_paths.standard / source
+        source_path = output_paths.standard / f"source={source}"
         if not source_path.exists():
             continue
-        df = read_parquet(source_path)
-        if df.empty:
-            continue
-        df = df[(df["ts_ms"] >= int(start.value // 1_000_000)) & (df["ts_ms"] <= int(end.value // 1_000_000))]
+        filters = (ds.field("ts_ms") >= start_ms) & (ds.field("ts_ms") <= end_ms)
+        df = read_parquet_filtered(source_path, filters=filters)
         if df.empty:
             continue
         if require_location:

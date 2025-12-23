@@ -298,19 +298,19 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 ### storage
 #### storage.parquet.compression
 - 类型/必填/默认/范围：string，可选；默认 `"zstd"`。
-- 作用与影响/读取位置：控制 Parquet 压缩算法；`src/store/parquet.py::write_parquet_configured`、`src/pipeline/standard.py::_write_parquet_batch`。
+- 作用与影响/读取位置：控制 Parquet 压缩算法；`src/store/parquet.py::write_parquet_configured`、`src/store/parquet.py::write_parquet_partitioned`。
 - 典型场景与示例：需要更快写入可设为 `"snappy"`，压缩率优先可保持 `"zstd"`。
 - 注意事项：不同压缩策略不会影响读取，但会影响磁盘占用与写入耗时。
 
 #### storage.parquet.partition_cols
-- 类型/必填/默认/范围：string[]，可选；默认 `["source"]`。
-- 作用与影响/读取位置：分区列由各阶段传参决定；`src/store/parquet.py::write_parquet_configured`。
-- 典型场景与示例：如需按 `event_id`/`station` 分区需同步修改对应阶段。
-- 注意事项：仅修改 YAML 不会改变现有输出结构。
+- 类型/必填/默认/范围：string[]，可选；默认 `["station_id","date"]`。
+- 作用与影响/读取位置：控制 Raw/Standard 长表分区；`src/store/parquet.py::write_parquet_partitioned`、`src/pipeline/raw.py::run_raw`、`src/pipeline/standard.py::_process_standard_source`。
+- 典型场景与示例：默认输出 `outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet`。
+- 注意事项：`date` 由 `ts_ms`（或 seismic 的 `starttime`）派生；修改分区需同步调整读取路径。
 
 #### storage.parquet.batch_rows
 - 类型/必填/默认/范围：int，可选；默认 `30000`（demo 为 `20000`）；正整数。
-- 作用与影响/读取位置：控制 Parquet 写入分批行数；`src/store/parquet.py::write_parquet_configured`。
+- 作用与影响/读取位置：控制 Parquet 写入分批行数/单文件行数；`src/store/parquet.py::write_parquet_configured`、`src/store/parquet.py::write_parquet_partitioned`。
 - 典型场景与示例：内存紧张时可降到 `20000` 或 `10000`。
 - 注意事项：值过小会降低写入吞吐，过大可能触发 ArrowMemoryError。
 
@@ -338,4 +338,4 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 - `origin_time_utc` 或 `align_interval` 格式不合法会触发解析异常。
 - 未提供 `stationxml` 时，`require_station_location: true` 会导致 link 阶段无数据。
 - `max_files_per_source`、`max_rows_per_source` 设置为 `0` 不生效；请使用 `null` 或正整数。
-- `storage.parquet.partition_cols`、`storage.zarr` 与 `api` 相关字段仍为预留/未接入配置的部分。
+- `storage.zarr` 与 `api` 相关字段仍为预留/未接入配置的部分。
