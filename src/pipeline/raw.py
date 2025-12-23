@@ -7,7 +7,7 @@ from typing import Any, Dict
 import pandas as pd
 
 from src.dq.reporting import basic_stats, write_dq_report
-from src.store.parquet import read_parquet, write_parquet
+from src.store.parquet import read_parquet, write_parquet_configured
 from src.utils import ensure_dir, write_json
 
 
@@ -38,7 +38,7 @@ def run_raw(
         geomag_df["proc_stage"] = "raw"
         geomag_df["proc_version"] = pipeline_version
         geomag_df["params_hash"] = params_hash
-        write_parquet(geomag_df, output_paths.raw / "geomag", partition_cols=["source"])
+        write_parquet_configured(geomag_df, output_paths.raw / "geomag", config, partition_cols=["source"])
         stats["geomag"] = basic_stats(geomag_df)
 
     # AEF
@@ -48,7 +48,7 @@ def run_raw(
         aef_df["proc_stage"] = "raw"
         aef_df["proc_version"] = pipeline_version
         aef_df["params_hash"] = params_hash
-        write_parquet(aef_df, output_paths.raw / "aef", partition_cols=["source"])
+        write_parquet_configured(aef_df, output_paths.raw / "aef", config, partition_cols=["source"])
         stats["aef"] = basic_stats(aef_df)
 
     # Seismic trace index + raw files
@@ -58,7 +58,7 @@ def run_raw(
         trace_df["proc_stage"] = "raw"
         trace_df["proc_version"] = pipeline_version
         trace_df["params_hash"] = params_hash
-        write_parquet(trace_df, output_paths.raw / "seismic", partition_cols=None)
+        write_parquet_configured(trace_df, output_paths.raw / "seismic", config, partition_cols=None)
         stats["seismic"] = {
             "trace_count": int(len(trace_df)),
             "station_count": int(trace_df["station"].nunique()) if not trace_df.empty else 0,

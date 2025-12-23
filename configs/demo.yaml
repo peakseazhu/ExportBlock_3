@@ -60,6 +60,7 @@ preprocess:
     enabled: true
     method: "rolling_mean"
     window: 3
+  batch_rows: 20000
 
 link:
   spatial_km: 1000
@@ -79,6 +80,7 @@ storage:
   parquet:
     compression: "zstd"
     partition_cols: ["source"]
+    batch_rows: 20000
   zarr:
     compressor: "zstd"
 

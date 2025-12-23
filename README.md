@@ -78,12 +78,21 @@ python scripts/pipeline_run.py \
   --event_id eq_20200101_000000
 ```
 设定批大小
+推荐在配置文件中设置（写入与清洗可分别控制）：
+```yaml
+preprocess:
+  batch_rows: 50000
+storage:
+  parquet:
+    batch_rows: 30000
+```
+如需临时覆盖，可使用环境变量（可选）：
 PowerShell 
 ```bash
 $env:PARQUET_BATCH_ROWS = "80000"
 python scripts/pipeline_run.py --stages manifest,ingest,raw,standard,spatial,link,features,model,plots --config configs/default.yaml --event_id eq_20200912_024411
 ```
-cmd 用法：
+cmd 用法（可选）：
 ```bash
 set PARQUET_BATCH_ROWS=80000
 python scripts/pipeline_run.py --stages manifest,ingest,raw,standard,spatial,link,features,model,plots --config configs/default.yaml --event_id eq_20200912_024411

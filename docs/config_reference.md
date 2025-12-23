@@ -198,45 +198,51 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 ### preprocess
 #### preprocess.outlier.method
 - 类型/必填/默认/范围：string，可选；默认 `"zscore"`。
-- 作用与影响/读取位置：当前仅写入质量标记；`src/pipeline/standard.py::_clean_timeseries`。
+- 作用与影响/读取位置：当前仅写入质量标记；`src/pipeline/standard.py::_clean_timeseries_group`。
 - 典型场景与示例：暂不支持其他方法，仅保留 `"zscore"`。
 - 注意事项：修改为其他值不会改变清洗逻辑。
 
 #### preprocess.outlier.threshold
 - 类型/必填/默认/范围：float，必填；默认 `4.0`。
-- 作用与影响/读取位置：z-score 异常阈值；`src/pipeline/standard.py::_clean_timeseries`。
+- 作用与影响/读取位置：z-score 异常阈值；`src/pipeline/standard.py::_clean_timeseries_group`。
 - 典型场景与示例：更严格可设为 `3.0`。
 - 注意事项：过小会导致过度插值。
 
 #### preprocess.interpolate.max_gap_minutes
 - 类型/必填/默认/范围：int，必填；默认 `10`（demo 为 `5`）。
-- 作用与影响/读取位置：插值允许的连续缺失点数；`src/pipeline/standard.py::_clean_timeseries`。
+- 作用与影响/读取位置：插值允许的连续缺失点数；`src/pipeline/standard.py::_clean_timeseries_group`。
 - 典型场景与示例：缺失较多时提高至 `20`。
 - 注意事项：这是点数上限，并非严格时间分钟。
 
 #### preprocess.interpolate.method
 - 类型/必填/默认/范围：string，可选；默认 `"linear"`。
-- 作用与影响/读取位置：当前仅写入质量标记；`src/pipeline/standard.py::_clean_timeseries`。
+- 作用与影响/读取位置：当前仅写入质量标记；`src/pipeline/standard.py::_clean_timeseries_group`。
 - 典型场景与示例：未来扩展其他插值方法时使用。
 - 注意事项：目前仍使用 pandas 默认线性插值。
 
 #### preprocess.filter.enabled
 - 类型/必填/默认/范围：bool，必填；默认 `true`。
-- 作用与影响/读取位置：是否进行滚动均值滤波；`src/pipeline/standard.py::_clean_timeseries`。
+- 作用与影响/读取位置：是否进行滚动均值滤波；`src/pipeline/standard.py::_clean_timeseries_group`。
 - 典型场景与示例：调试原始噪声时设为 `false`。
 - 注意事项：关闭后 `filter_effect.json` 中的 after_std 可能为空。
 
 #### preprocess.filter.method
 - 类型/必填/默认/范围：string，可选；默认 `"rolling_mean"`。
-- 作用与影响/读取位置：当前仅写入质量标记；`src/pipeline/standard.py::_clean_timeseries`。
+- 作用与影响/读取位置：当前仅写入质量标记；`src/pipeline/standard.py::_clean_timeseries_group`。
 - 典型场景与示例：预留其他滤波方式。
 - 注意事项：修改不会改变实际滤波算法。
 
 #### preprocess.filter.window
 - 类型/必填/默认/范围：int，必填；默认 `5`（demo 为 `3`）；正整数。
-- 作用与影响/读取位置：滚动均值窗口大小；`src/pipeline/standard.py::_clean_timeseries`。
+- 作用与影响/读取位置：滚动均值窗口大小；`src/pipeline/standard.py::_clean_timeseries_group`。
 - 典型场景与示例：平滑强度不足时增大窗口。
 - 注意事项：窗口过大可能掩盖异常信号。
+
+#### preprocess.batch_rows
+- 类型/必填/默认/范围：int，可选；默认 `50000`（demo 为 `20000`）；正整数。
+- 作用与影响/读取位置：控制 standard 阶段按批清洗 geomag/aef；`src/pipeline/standard.py::_process_standard_source`。
+- 典型场景与示例：内存紧张时可降到 `20000` 或更低。
+- 注意事项：值过小会降低吞吐；过大可能触发 MemoryError。
 
 ### link
 #### link.spatial_km
@@ -292,15 +298,21 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 ### storage
 #### storage.parquet.compression
 - 类型/必填/默认/范围：string，可选；默认 `"zstd"`。
-- 作用与影响/读取位置：当前未从配置读取；实际写入由 `src/store/parquet.py::write_parquet` 默认 `zstd` 控制。
-- 典型场景与示例：希望更快写入可未来设为 `"snappy"`。
-- 注意事项：当前修改无效，需代码层支持。
+- 作用与影响/读取位置：控制 Parquet 压缩算法；`src/store/parquet.py::write_parquet_configured`、`src/pipeline/standard.py::_write_parquet_batch`。
+- 典型场景与示例：需要更快写入可设为 `"snappy"`，压缩率优先可保持 `"zstd"`。
+- 注意事项：不同压缩策略不会影响读取，但会影响磁盘占用与写入耗时。
 
 #### storage.parquet.partition_cols
 - 类型/必填/默认/范围：string[]，可选；默认 `["source"]`。
-- 作用与影响/读取位置：当前未从配置读取；分区列由各阶段写入时硬编码。
-- 典型场景与示例：未来按 `event_id` 分区时可调整。
-- 注意事项：当前修改无效，需代码层支持。
+- 作用与影响/读取位置：分区列由各阶段传参决定；`src/store/parquet.py::write_parquet_configured`。
+- 典型场景与示例：如需按 `event_id`/`station` 分区需同步修改对应阶段。
+- 注意事项：仅修改 YAML 不会改变现有输出结构。
+
+#### storage.parquet.batch_rows
+- 类型/必填/默认/范围：int，可选；默认 `30000`（demo 为 `20000`）；正整数。
+- 作用与影响/读取位置：控制 Parquet 写入分批行数；`src/store/parquet.py::write_parquet_configured`。
+- 典型场景与示例：内存紧张时可降到 `20000` 或 `10000`。
+- 注意事项：值过小会降低写入吞吐，过大可能触发 ArrowMemoryError。
 
 #### storage.zarr.compressor
 - 类型/必填/默认/范围：string，可选；默认 `"zstd"`。
@@ -326,4 +338,4 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 - `origin_time_utc` 或 `align_interval` 格式不合法会触发解析异常。
 - 未提供 `stationxml` 时，`require_station_location: true` 会导致 link 阶段无数据。
 - `max_files_per_source`、`max_rows_per_source` 设置为 `0` 不生效；请使用 `null` 或正整数。
-- `storage` 与 `api` 相关字段当前为预留/未接入配置的部分。
+- `storage.parquet.partition_cols`、`storage.zarr` 与 `api` 相关字段仍为预留/未接入配置的部分。

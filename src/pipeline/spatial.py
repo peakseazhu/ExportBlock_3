@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from src.dq.reporting import write_dq_report
-from src.store.parquet import read_parquet, write_parquet
+from src.store.parquet import read_parquet, write_parquet_configured
 
 
 def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -58,7 +58,7 @@ def run_spatial(
     else:
         station_df = pd.DataFrame(columns=["station_id", "lat", "lon", "elev"])
 
-    write_parquet(station_df, output_paths.reports / "spatial_index", partition_cols=None)
+    write_parquet_configured(station_df, output_paths.reports / "spatial_index", config, partition_cols=None)
     report = {
         "station_count": int(len(station_df)),
         "index_type": "bruteforce",

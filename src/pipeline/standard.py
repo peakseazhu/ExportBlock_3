@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import gc
 import json
 import math
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import pandas as pd
 from obspy import read
+import pyarrow as pa
+import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import zarr
 
 from src.dq.reporting import basic_stats, write_dq_report
-from src.store.parquet import read_parquet, write_parquet
+from src.store.parquet import read_parquet, write_parquet_configured
 from src.utils import ensure_dir, write_json
 
 
@@ -30,63 +35,71 @@ def _parse_flags(series: pd.Series) -> List[Dict[str, Any]]:
     return parsed
 
 
-def _clean_timeseries(df: pd.DataFrame, config: Dict[str, Any]) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def _serialize_flags(series: pd.Series) -> pd.Series:
+    return series.apply(lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, dict) else x)
+
+
+def _resolve_preprocess_batch_rows(config: Dict[str, Any]) -> int:
+    value = config.get("preprocess", {}).get("batch_rows")
+    if value is None:
+        return 50_000
+    value = int(value)
+    return value if value > 0 else 50_000
+
+
+def _resolve_overlap(config: Dict[str, Any]) -> int:
+    interp_cfg = config.get("preprocess", {}).get("interpolate", {})
+    filter_cfg = config.get("preprocess", {}).get("filter", {})
+    interp_limit = int(interp_cfg.get("max_gap_minutes", 10))
+    filter_window = int(filter_cfg.get("window", 5)) if filter_cfg.get("enabled", False) else 0
+    return max(interp_limit, filter_window)
+
+
+def _clean_timeseries_group(
+    df: pd.DataFrame, config: Dict[str, Any], mean: float | None, std: float | None
+) -> Tuple[pd.DataFrame, np.ndarray]:
     if df.empty:
-        return df, {}
+        return df, np.array([])
 
     df = df.copy()
     df["quality_flags"] = _parse_flags(df["quality_flags"])
     outlier_cfg = config.get("preprocess", {}).get("outlier", {})
     threshold = float(outlier_cfg.get("threshold", 4.0))
 
-    def apply_group(group: pd.DataFrame) -> pd.DataFrame:
-        station_id = group["station_id"].iloc[0] if "station_id" in group else group.name[0]
-        channel = group["channel"].iloc[0] if "channel" in group else group.name[1]
-        if "station_id" not in group:
-            group = group.copy()
-            group["station_id"] = station_id
-            group["channel"] = channel
+    values = df["value"].astype(float)
+    mean = float(mean) if mean is not None else float(values.mean())
+    std = float(std) if std is not None else float(values.std() or 1.0)
+    std = std if std != 0 else 1.0
+    z = (values - mean) / std
+    outlier_mask = z.abs() > threshold
+    for idx in df.index[outlier_mask]:
+        flags = df.at[idx, "quality_flags"]
+        flags["is_outlier"] = True
+        flags["outlier_method"] = "zscore"
+        flags["threshold"] = threshold
+        df.at[idx, "quality_flags"] = flags
+    df.loc[outlier_mask, "value"] = np.nan
 
-        values = group["value"].astype(float)
-        mean = values.mean()
-        std = values.std() if values.std() != 0 else 1.0
-        z = (values - mean) / std
-        outlier_mask = z.abs() > threshold
-        for idx in group.index[outlier_mask]:
-            flags = group.at[idx, "quality_flags"]
-            flags["is_outlier"] = True
-            flags["outlier_method"] = "zscore"
-            flags["threshold"] = threshold
-            group.at[idx, "quality_flags"] = flags
-        group.loc[outlier_mask, "value"] = np.nan
+    interp_cfg = config.get("preprocess", {}).get("interpolate", {})
+    df["value"] = df["value"].interpolate(
+        limit=int(interp_cfg.get("max_gap_minutes", 10)),
+        limit_direction="both",
+    )
+    for idx, val in df["value"].items():
+        flags = df.at[idx, "quality_flags"]
+        if math.isnan(val):
+            flags["is_missing"] = True
+            flags["missing_reason"] = flags.get("missing_reason") or "gap"
+        else:
+            if flags.get("is_missing"):
+                flags["is_interpolated"] = True
+                flags["interp_method"] = interp_cfg.get("method", "linear")
+        df.at[idx, "quality_flags"] = flags
 
-        group["value"] = group["value"].interpolate(
-            limit=int(config.get("preprocess", {}).get("interpolate", {}).get("max_gap_minutes", 10)),
-            limit_direction="both",
-        )
-        for idx, val in group["value"].items():
-            flags = group.at[idx, "quality_flags"]
-            if math.isnan(val):
-                flags["is_missing"] = True
-                flags["missing_reason"] = flags.get("missing_reason") or "gap"
-            else:
-                if flags.get("is_missing"):
-                    flags["is_interpolated"] = True
-                    flags["interp_method"] = config.get("preprocess", {}).get("interpolate", {}).get(
-                        "method", "linear"
-                    )
-            group.at[idx, "quality_flags"] = flags
-        return group
-
-    try:
-        df = df.groupby(["station_id", "channel"], group_keys=False).apply(apply_group, include_groups=False)
-    except TypeError:
-        df = df.groupby(["station_id", "channel"], group_keys=False).apply(apply_group)
+    before_values = df["value"].astype(float).to_numpy(copy=True)
 
     filter_cfg = config.get("preprocess", {}).get("filter", {})
-    filter_enabled = filter_cfg.get("enabled", False)
-    before_std = float(df["value"].std()) if not df["value"].isna().all() else None
-    if filter_enabled:
+    if filter_cfg.get("enabled", False):
         window = int(filter_cfg.get("window", 5))
         df["value"] = df["value"].rolling(window=window, min_periods=1).mean()
         for idx in df.index:
@@ -95,9 +108,62 @@ def _clean_timeseries(df: pd.DataFrame, config: Dict[str, Any]) -> Tuple[pd.Data
             flags["filter_type"] = filter_cfg.get("method", "rolling_mean")
             flags["filter_params"] = {"window": window}
             df.at[idx, "quality_flags"] = flags
-    after_std = float(df["value"].std()) if not df["value"].isna().all() else None
-    filter_effect = {"before_std": before_std, "after_std": after_std}
-    return df, filter_effect
+
+    return df, before_values
+
+
+def _update_sum_stats(
+    stats: Dict[str, float], values: np.ndarray
+) -> None:
+    if values.size == 0:
+        return
+    stats["count"] += int(values.size)
+    stats["sum"] += float(values.sum())
+    stats["sum_sq"] += float((values * values).sum())
+
+
+def _stats_from_sum(stats: Dict[str, float]) -> float | None:
+    if stats["count"] <= 0:
+        return None
+    mean = stats["sum"] / stats["count"]
+    var = stats["sum_sq"] / stats["count"] - mean * mean
+    if var < 0:
+        var = 0.0
+    return float(math.sqrt(var)) if stats["count"] > 1 else 0.0
+
+
+def _compute_group_stats(
+    dataset: ds.Dataset,
+    batch_rows: int,
+    max_rows: int | None,
+) -> Tuple[Dict[Tuple[str, str], Dict[str, float]], Dict[str, float]]:
+    stats: Dict[Tuple[str, str], Dict[str, float]] = {}
+    total = {"count": 0, "sum": 0.0, "sum_sq": 0.0}
+    seen = 0
+    scanner = dataset.scanner(columns=["station_id", "channel", "value"], batch_size=batch_rows)
+    for batch in scanner.to_batches():
+        df = batch.to_pandas()
+        if df.empty:
+            continue
+        if max_rows is not None and seen >= max_rows:
+            break
+        if max_rows is not None and seen + len(df) > max_rows:
+            df = df.iloc[: max_rows - seen]
+        seen += len(df)
+        df["value"] = pd.to_numeric(df["value"], errors="coerce")
+        grouped = df.groupby(["station_id", "channel"])["value"]
+        for key, series in grouped:
+            values = series.to_numpy(dtype=float, copy=False)
+            values = values[~np.isnan(values)]
+            if values.size == 0:
+                continue
+            entry = stats.get(key)
+            if entry is None:
+                entry = {"count": 0, "sum": 0.0, "sum_sq": 0.0}
+                stats[key] = entry
+            _update_sum_stats(entry, values)
+            _update_sum_stats(total, values)
+    return stats, total
 
 
 def _seismic_features(
@@ -252,6 +318,191 @@ def _vlf_features(config: Dict[str, Any], raw_dir: Path, max_rows: int | None, p
     return df
 
 
+def _write_parquet_batch(
+    writer: pq.ParquetWriter | None,
+    df: pd.DataFrame,
+    file_path: Path,
+    compression: str,
+) -> pq.ParquetWriter:
+    df = df.copy()
+    if "quality_flags" in df.columns:
+        df["quality_flags"] = _serialize_flags(df["quality_flags"])
+    table = pa.Table.from_pandas(df)
+    if writer is None:
+        writer = pq.ParquetWriter(file_path, table.schema, compression=compression)
+    writer.write_table(table)
+    return writer
+
+
+def _process_standard_source(
+    source: str,
+    raw_path: Path,
+    output_paths,
+    config: Dict[str, Any],
+    params_hash: str,
+    max_rows: int | None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    dataset = ds.dataset(raw_path, format="parquet", partitioning="hive")
+    batch_rows = _resolve_preprocess_batch_rows(config)
+    overlap = _resolve_overlap(config)
+    if overlap >= batch_rows:
+        batch_rows = max(overlap + 1, batch_rows)
+
+    group_stats, _ = _compute_group_stats(dataset, batch_rows, max_rows)
+    if not group_stats:
+        return {}, {}
+
+    mean_std = {
+        key: (
+            stats["sum"] / stats["count"],
+            _stats_from_sum(stats) or 1.0,
+        )
+        for key, stats in group_stats.items()
+        if stats["count"] > 0
+    }
+
+    output_base = output_paths.standard / source
+    if output_base.exists():
+        shutil.rmtree(output_base)
+    partition_dir = output_base / f"source={source}"
+    ensure_dir(partition_dir)
+    file_path = partition_dir / "data.parquet"
+
+    parquet_cfg = (config.get("storage") or {}).get("parquet") or {}
+    compression = parquet_cfg.get("compression", "zstd")
+
+    report = {
+        "rows": 0,
+        "ts_min": None,
+        "ts_max": None,
+        "missing_rate": None,
+        "outlier_rate": None,
+        "station_count": 0,
+    }
+    station_ids = set()
+    missing_count = 0
+    outlier_count = 0
+    before_stats = {"count": 0, "sum": 0.0, "sum_sq": 0.0}
+    after_stats = {"count": 0, "sum": 0.0, "sum_sq": 0.0}
+
+    tails: Dict[Tuple[str, str], pd.DataFrame] = {}
+    writer: pq.ParquetWriter | None = None
+    seen = 0
+    scanner = dataset.scanner(
+        columns=[
+            "ts_ms",
+            "source",
+            "station_id",
+            "channel",
+            "value",
+            "lat",
+            "lon",
+            "elev",
+            "quality_flags",
+            "proc_stage",
+            "proc_version",
+            "params_hash",
+        ],
+        batch_size=batch_rows,
+    )
+
+    try:
+        for batch in scanner.to_batches():
+            df = batch.to_pandas()
+            if df.empty:
+                continue
+            if max_rows is not None and seen >= max_rows:
+                break
+            if max_rows is not None and seen + len(df) > max_rows:
+                df = df.iloc[: max_rows - seen]
+            seen += len(df)
+            df["value"] = pd.to_numeric(df["value"], errors="coerce")
+            grouped = df.groupby(["station_id", "channel"], sort=False)
+            for key, group in grouped:
+                tail_raw = tails.get(key)
+                if tail_raw is not None and not tail_raw.empty:
+                    combined_raw = pd.concat([tail_raw, group], ignore_index=True)
+                else:
+                    combined_raw = group
+                combined_raw = combined_raw.sort_values("ts_ms")
+                mean, std = mean_std.get(key, (None, None))
+                cleaned, before_values = _clean_timeseries_group(combined_raw, config, mean, std)
+                if overlap > 0 and len(cleaned) > overlap:
+                    to_write = cleaned.iloc[:-overlap]
+                    before_values = before_values[:-overlap]
+                    tails[key] = combined_raw.iloc[-overlap:].copy()
+                else:
+                    to_write = cleaned
+                    tails[key] = combined_raw.iloc[0:0].copy()
+
+                if to_write.empty:
+                    continue
+                to_write["proc_stage"] = "standard"
+                to_write["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
+                to_write["params_hash"] = params_hash
+
+                ts_min = int(to_write["ts_ms"].min())
+                ts_max = int(to_write["ts_ms"].max())
+                report["ts_min"] = ts_min if report["ts_min"] is None else min(report["ts_min"], ts_min)
+                report["ts_max"] = ts_max if report["ts_max"] is None else max(report["ts_max"], ts_max)
+                report["rows"] += int(len(to_write))
+                station_ids.add(key[0])
+
+                missing_count += int(to_write["value"].isna().sum())
+                outlier_count += sum(
+                    1
+                    for flags in to_write["quality_flags"].tolist()
+                    if isinstance(flags, dict) and flags.get("is_outlier")
+                )
+
+                before_vals = before_values[~np.isnan(before_values)]
+                _update_sum_stats(before_stats, before_vals)
+                after_vals = to_write["value"].to_numpy(dtype=float, copy=False)
+                after_vals = after_vals[~np.isnan(after_vals)]
+                _update_sum_stats(after_stats, after_vals)
+
+                writer = _write_parquet_batch(writer, to_write, file_path, compression)
+            gc.collect()
+
+        for key, tail_raw in tails.items():
+            if tail_raw.empty:
+                continue
+            mean, std = mean_std.get(key, (None, None))
+            cleaned, before_values = _clean_timeseries_group(tail_raw, config, mean, std)
+            if cleaned.empty:
+                continue
+            cleaned["proc_stage"] = "standard"
+            cleaned["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
+            cleaned["params_hash"] = params_hash
+            ts_min = int(cleaned["ts_ms"].min())
+            ts_max = int(cleaned["ts_ms"].max())
+            report["ts_min"] = ts_min if report["ts_min"] is None else min(report["ts_min"], ts_min)
+            report["ts_max"] = ts_max if report["ts_max"] is None else max(report["ts_max"], ts_max)
+            report["rows"] += int(len(cleaned))
+            station_ids.add(key[0])
+            missing_count += int(cleaned["value"].isna().sum())
+            outlier_count += sum(
+                1
+                for flags in cleaned["quality_flags"].tolist()
+                if isinstance(flags, dict) and flags.get("is_outlier")
+            )
+            before_vals = before_values[~np.isnan(before_values)]
+            _update_sum_stats(before_stats, before_vals)
+            after_vals = cleaned["value"].to_numpy(dtype=float, copy=False)
+            after_vals = after_vals[~np.isnan(after_vals)]
+            _update_sum_stats(after_stats, after_vals)
+            writer = _write_parquet_batch(writer, cleaned, file_path, compression)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    report["station_count"] = int(len(station_ids))
+    report["missing_rate"] = float(missing_count / report["rows"]) if report["rows"] else None
+    report["outlier_rate"] = float(outlier_count / report["rows"]) if report["rows"] else None
+    filter_effect = {"before_std": _stats_from_sum(before_stats), "after_std": _stats_from_sum(after_stats)}
+    return report, filter_effect
+
+
 def run_standard(
     base_dir: Path,
     config: Dict[str, Any],
@@ -269,34 +520,30 @@ def run_standard(
 
     geomag_raw = output_paths.raw / "geomag"
     if geomag_raw.exists():
-        geomag_df = read_parquet(geomag_raw)
-        cleaned, filter_effect = _clean_timeseries(geomag_df, config)
-        cleaned["proc_stage"] = "standard"
-        cleaned["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
-        cleaned["params_hash"] = params_hash
-        write_parquet(cleaned, output_paths.standard / "geomag", partition_cols=["source"])
-        reports["geomag"] = basic_stats(cleaned)
-        filter_reports["geomag"] = filter_effect
+        report, filter_effect = _process_standard_source(
+            "geomag", geomag_raw, output_paths, config, params_hash, max_rows
+        )
+        if report:
+            reports["geomag"] = report
+            filter_reports["geomag"] = filter_effect
 
     aef_raw = output_paths.raw / "aef"
     if aef_raw.exists():
-        aef_df = read_parquet(aef_raw)
-        cleaned, filter_effect = _clean_timeseries(aef_df, config)
-        cleaned["proc_stage"] = "standard"
-        cleaned["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
-        cleaned["params_hash"] = params_hash
-        write_parquet(cleaned, output_paths.standard / "aef", partition_cols=["source"])
-        reports["aef"] = basic_stats(cleaned)
-        filter_reports["aef"] = filter_effect
+        report, filter_effect = _process_standard_source(
+            "aef", aef_raw, output_paths, config, params_hash, max_rows
+        )
+        if report:
+            reports["aef"] = report
+            filter_reports["aef"] = filter_effect
 
     seismic_df = _seismic_features(base_dir, config, output_paths.raw, max_rows, params_hash)
     if not seismic_df.empty:
-        write_parquet(seismic_df, output_paths.standard / "seismic", partition_cols=["source"])
+        write_parquet_configured(seismic_df, output_paths.standard / "seismic", config, partition_cols=["source"])
         reports["seismic"] = basic_stats(seismic_df)
 
     vlf_df = _vlf_features(config, output_paths.raw, max_rows, params_hash)
     if not vlf_df.empty:
-        write_parquet(vlf_df, output_paths.standard / "vlf", partition_cols=["source"])
+        write_parquet_configured(vlf_df, output_paths.standard / "vlf", config, partition_cols=["source"])
         reports["vlf"] = basic_stats(vlf_df)
 
     write_dq_report(output_paths.reports / "dq_standard.json", {"sources": reports})

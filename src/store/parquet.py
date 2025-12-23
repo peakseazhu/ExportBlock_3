@@ -4,7 +4,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import pyarrow as pa
@@ -131,6 +131,24 @@ def write_parquet(
             pq.write_table(table, file_path, compression=compression)
     except (pa.ArrowMemoryError, MemoryError):
         _write_parquet_batched(df, output_dir, partition_cols, compression, 200_000)
+
+
+def write_parquet_configured(
+    df: pd.DataFrame,
+    output_dir: Path,
+    config: Dict[str, Any],
+    partition_cols: Optional[List[str]] = None,
+) -> None:
+    parquet_cfg = (config.get("storage") or {}).get("parquet") or {}
+    compression = parquet_cfg.get("compression", "zstd")
+    batch_rows = parquet_cfg.get("batch_rows")
+    write_parquet(
+        df,
+        output_dir,
+        partition_cols=partition_cols,
+        compression=compression,
+        batch_rows=batch_rows,
+    )
 
 
 def read_parquet(path: Path) -> pd.DataFrame:

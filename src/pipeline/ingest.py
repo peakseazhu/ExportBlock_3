@@ -16,7 +16,7 @@ from src.dq.reporting import basic_stats, write_dq_report
 from src.io.iaga2002 import parse_iaga_file
 from src.io.seismic import extract_trace_metadata, join_station_metadata, load_station_metadata
 from src.io.vlf import compute_gap_report, read_vlf_cdf
-from src.store.parquet import write_parquet
+from src.store.parquet import write_parquet_configured
 from src.utils import ensure_dir, write_json
 
 
@@ -71,7 +71,7 @@ def run_ingest(
     geomag_df = pd.concat(geomag_frames, ignore_index=True) if geomag_frames else pd.DataFrame()
     if max_rows:
         geomag_df = geomag_df.head(max_rows)
-    write_parquet(geomag_df, output_paths.ingest / "geomag", partition_cols=None)
+    write_parquet_configured(geomag_df, output_paths.ingest / "geomag", config, partition_cols=None)
     dq_iaga = {"geomag": basic_stats(geomag_df)}
 
     # AEF
@@ -81,7 +81,7 @@ def run_ingest(
     aef_df = pd.concat(aef_frames, ignore_index=True) if aef_frames else pd.DataFrame()
     if max_rows:
         aef_df = aef_df.head(max_rows)
-    write_parquet(aef_df, output_paths.ingest / "aef", partition_cols=None)
+    write_parquet_configured(aef_df, output_paths.ingest / "aef", config, partition_cols=None)
     dq_iaga["aef"] = basic_stats(aef_df)
     write_dq_report(output_paths.reports / "dq_ingest_iaga.json", dq_iaga)
 
@@ -97,7 +97,7 @@ def run_ingest(
         meta = load_station_metadata(base_dir / stationxml_path)
         trace_df, station_report = join_station_metadata(trace_df, meta)
 
-    write_parquet(trace_df, output_paths.ingest / "seismic", partition_cols=None)
+    write_parquet_configured(trace_df, output_paths.ingest / "seismic", config, partition_cols=None)
     if not trace_df.empty:
         ts_min = trace_df["starttime"].min()
         ts_max = trace_df["endtime"].max()
@@ -171,7 +171,7 @@ def run_ingest(
 
     if vlf_records:
         vlf_catalog = pd.DataFrame.from_records(vlf_records)
-        write_parquet(vlf_catalog, output_paths.raw / "vlf_catalog", partition_cols=None)
+        write_parquet_configured(vlf_catalog, output_paths.raw / "vlf_catalog", config, partition_cols=None)
         sample = vlf_records[0]
         dq_vlf = {
             "files": len(vlf_records),
