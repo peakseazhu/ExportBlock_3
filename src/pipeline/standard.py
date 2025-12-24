@@ -49,6 +49,55 @@ def _resolve_overlap(config: Dict[str, Any]) -> int:
     return max(interp_limit, filter_window)
 
 
+def _resolve_minute_expansion(config: Dict[str, Any], source: str) -> Dict[str, Any] | None:
+    expand_cfg = config.get("preprocess", {}).get("expand_minute_to_seconds", {})
+    source_cfg = expand_cfg.get(source)
+    if not source_cfg:
+        return None
+    if not source_cfg.get("enabled", False):
+        return None
+    seconds = int(source_cfg.get("seconds", 60))
+    seconds = max(seconds, 1)
+    mode = str(source_cfg.get("mode", "centered")).lower()
+    chunk_rows = int(source_cfg.get("chunk_rows", 2000))
+    chunk_rows = max(chunk_rows, 1)
+    return {"seconds": seconds, "mode": mode, "chunk_rows": chunk_rows}
+
+
+def _iter_expand_minute_to_seconds(
+    df: pd.DataFrame, seconds: int, mode: str, chunk_rows: int
+):
+    if df.empty:
+        return
+
+    if mode == "centered":
+        half = seconds // 2
+        offsets = np.arange(-half, seconds - half)
+    else:
+        offsets = np.arange(0, seconds)
+    offsets_ms = offsets.astype("int64") * 1000
+
+    for start in range(0, len(df), chunk_rows):
+        chunk = df.iloc[start : start + chunk_rows].copy()
+        repeated = chunk.loc[chunk.index.repeat(len(offsets))].copy()
+        repeated["ts_ms"] = np.repeat(chunk["ts_ms"].to_numpy(), len(offsets)) + np.tile(
+            offsets_ms, len(chunk)
+        )
+        flags = repeated["quality_flags"].tolist()
+        updated_flags = []
+        for flag in flags:
+            if isinstance(flag, dict):
+                flag = dict(flag)
+            else:
+                flag = {}
+            flag["is_interpolated"] = True
+            flag["interp_method"] = "minute_expand"
+            flag["note"] = flag.get("note") or "expanded_from_minute"
+            updated_flags.append(flag)
+        repeated["quality_flags"] = updated_flags
+        yield repeated
+
+
 def _clean_timeseries_group(
     df: pd.DataFrame, config: Dict[str, Any], mean: float | None, std: float | None
 ) -> Tuple[pd.DataFrame, np.ndarray]:
@@ -161,51 +210,65 @@ def _compute_group_stats(
 
 
 def _seismic_features(
-    base_dir: Path,
     config: Dict[str, Any],
-    raw_dir: Path,
+    output_paths,
     max_rows: int | None,
     params_hash: str,
 ) -> pd.DataFrame:
-    interval_sec = 60
+    interval_sec = int(config.get("seismic", {}).get("feature_interval_sec", 60))
+    interval_sec = max(interval_sec, 1)
     records: List[Dict[str, Any]] = []
     trace_index = None
-    trace_index_path = raw_dir / "source=seismic"
+    trace_index_path = output_paths.ingest / "seismic"
     if trace_index_path.exists():
         trace_index = read_parquet(trace_index_path)
 
-    file_dir = raw_dir / "seismic_files"
-    for mseed_file in file_dir.glob("*.mseed"):
-        stream = read(str(mseed_file))
-        for trace in stream:
-            data = trace.data.astype(float)
-            sr = float(trace.stats.sampling_rate)
-            window = int(sr * interval_sec)
-            start_time = trace.stats.starttime.datetime
-            for idx in range(0, len(data), window):
-                segment = data[idx : idx + window]
-                if len(segment) < window:
-                    break
-                ts = pd.Timestamp(start_time) + pd.Timedelta(seconds=idx / sr)
-                station_id = f"{trace.stats.network}.{trace.stats.station}.{trace.stats.location or ''}.{trace.stats.channel}"
-                records.append(
-                    {
-                        "ts_ms": int(ts.value // 1_000_000),
-                        "source": "seismic",
-                        "station_id": station_id,
-                        "channel": f"{trace.stats.channel}_rms",
-                        "value": float(np.sqrt(np.mean(segment**2))),
-                    }
-                )
-                records.append(
-                    {
-                        "ts_ms": int(ts.value // 1_000_000),
-                        "source": "seismic",
-                        "station_id": station_id,
-                        "channel": f"{trace.stats.channel}_mean_abs",
-                        "value": float(np.mean(np.abs(segment))),
-                    }
-                )
+    file_dir = output_paths.ingest / "seismic_files"
+    if not file_dir.exists():
+        return pd.DataFrame()
+    seismic_cfg = config.get("paths", {}).get("seismic", {})
+    mseed_patterns = list(seismic_cfg.get("mseed_patterns", ["*.seed", "*.mseed"]))
+    seen_files = set()
+    for pattern in mseed_patterns:
+        for mseed_file in file_dir.glob(pattern):
+            if mseed_file in seen_files:
+                continue
+            seen_files.add(mseed_file)
+            stream = read(str(mseed_file))
+            for trace in stream:
+                data = trace.data.astype(float)
+                sr = float(trace.stats.sampling_rate)
+                window = int(sr * interval_sec)
+                start_time = trace.stats.starttime.datetime
+                for idx in range(0, len(data), window):
+                    segment = data[idx : idx + window]
+                    if len(segment) < window:
+                        break
+                    ts = pd.Timestamp(start_time, tz="UTC") + pd.Timedelta(seconds=idx / sr)
+                    station_id = (
+                        f"{trace.stats.network}.{trace.stats.station}.{trace.stats.location or ''}."
+                        f"{trace.stats.channel}"
+                    )
+                    records.append(
+                        {
+                            "ts_ms": int(ts.value // 1_000_000),
+                            "source": "seismic",
+                            "station_id": station_id,
+                            "channel": f"{trace.stats.channel}_rms",
+                            "value": float(np.sqrt(np.mean(segment**2))),
+                        }
+                    )
+                    records.append(
+                        {
+                            "ts_ms": int(ts.value // 1_000_000),
+                            "source": "seismic",
+                            "station_id": station_id,
+                            "channel": f"{trace.stats.channel}_mean_abs",
+                            "value": float(np.mean(np.abs(segment))),
+                        }
+                    )
+                    if max_rows and len(records) >= max_rows:
+                        break
                 if max_rows and len(records) >= max_rows:
                     break
             if max_rows and len(records) >= max_rows:
@@ -323,6 +386,7 @@ def _process_standard_source(
     dataset = ds.dataset(raw_path, format="parquet", partitioning="hive")
     batch_rows = _resolve_preprocess_batch_rows(config)
     overlap = _resolve_overlap(config)
+    expand_cfg = _resolve_minute_expansion(config, source)
     if overlap >= batch_rows:
         batch_rows = max(overlap + 1, batch_rows)
 
@@ -414,19 +478,45 @@ def _process_standard_source(
                 to_write["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
                 to_write["params_hash"] = params_hash
 
-                ts_min = int(to_write["ts_ms"].min())
-                ts_max = int(to_write["ts_ms"].max())
-                report["ts_min"] = ts_min if report["ts_min"] is None else min(report["ts_min"], ts_min)
-                report["ts_max"] = ts_max if report["ts_max"] is None else max(report["ts_max"], ts_max)
-                report["rows"] += int(len(to_write))
+                if expand_cfg:
+                    for expanded in _iter_expand_minute_to_seconds(
+                        to_write,
+                        expand_cfg["seconds"],
+                        expand_cfg["mode"],
+                        expand_cfg["chunk_rows"],
+                    ):
+                        if expanded.empty:
+                            continue
+                        part_counters = write_parquet_partitioned(
+                            expanded,
+                            output_base,
+                            config,
+                            part_counters=part_counters,
+                        )
+                        ts_min = int(expanded["ts_ms"].min())
+                        ts_max = int(expanded["ts_ms"].max())
+                        report["ts_min"] = (
+                            ts_min if report["ts_min"] is None else min(report["ts_min"], ts_min)
+                        )
+                        report["ts_max"] = (
+                            ts_max if report["ts_max"] is None else max(report["ts_max"], ts_max)
+                        )
+                    report["rows"] += int(len(to_write) * expand_cfg["seconds"])
+                else:
+                    ts_min = int(to_write["ts_ms"].min())
+                    ts_max = int(to_write["ts_ms"].max())
+                    report["ts_min"] = ts_min if report["ts_min"] is None else min(report["ts_min"], ts_min)
+                    report["ts_max"] = ts_max if report["ts_max"] is None else max(report["ts_max"], ts_max)
+                    report["rows"] += int(len(to_write))
                 station_ids.add(key[0])
 
-                missing_count += int(to_write["value"].isna().sum())
+                missing_scale = expand_cfg["seconds"] if expand_cfg else 1
+                missing_count += int(to_write["value"].isna().sum()) * missing_scale
                 outlier_count += sum(
                     1
                     for flags in to_write["quality_flags"].tolist()
                     if isinstance(flags, dict) and flags.get("is_outlier")
-                )
+                ) * missing_scale
 
                 before_vals = before_values[~np.isnan(before_values)]
                 _update_sum_stats(before_stats, before_vals)
@@ -434,12 +524,13 @@ def _process_standard_source(
                 after_vals = after_vals[~np.isnan(after_vals)]
                 _update_sum_stats(after_stats, after_vals)
 
-                part_counters = write_parquet_partitioned(
-                    to_write,
-                    output_base,
-                    config,
-                    part_counters=part_counters,
-                )
+                if not expand_cfg:
+                    part_counters = write_parquet_partitioned(
+                        to_write,
+                        output_base,
+                        config,
+                        part_counters=part_counters,
+                    )
             gc.collect()
 
         for key, tail_raw in tails.items():
@@ -453,29 +544,56 @@ def _process_standard_source(
             cleaned["proc_stage"] = "standard"
             cleaned["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
             cleaned["params_hash"] = params_hash
-            ts_min = int(cleaned["ts_ms"].min())
-            ts_max = int(cleaned["ts_ms"].max())
-            report["ts_min"] = ts_min if report["ts_min"] is None else min(report["ts_min"], ts_min)
-            report["ts_max"] = ts_max if report["ts_max"] is None else max(report["ts_max"], ts_max)
-            report["rows"] += int(len(cleaned))
+            if expand_cfg:
+                for expanded in _iter_expand_minute_to_seconds(
+                    cleaned,
+                    expand_cfg["seconds"],
+                    expand_cfg["mode"],
+                    expand_cfg["chunk_rows"],
+                ):
+                    if expanded.empty:
+                        continue
+                    part_counters = write_parquet_partitioned(
+                        expanded,
+                        output_base,
+                        config,
+                        part_counters=part_counters,
+                    )
+                    ts_min = int(expanded["ts_ms"].min())
+                    ts_max = int(expanded["ts_ms"].max())
+                    report["ts_min"] = (
+                        ts_min if report["ts_min"] is None else min(report["ts_min"], ts_min)
+                    )
+                    report["ts_max"] = (
+                        ts_max if report["ts_max"] is None else max(report["ts_max"], ts_max)
+                    )
+                report["rows"] += int(len(cleaned) * expand_cfg["seconds"])
+            else:
+                ts_min = int(cleaned["ts_ms"].min())
+                ts_max = int(cleaned["ts_ms"].max())
+                report["ts_min"] = ts_min if report["ts_min"] is None else min(report["ts_min"], ts_min)
+                report["ts_max"] = ts_max if report["ts_max"] is None else max(report["ts_max"], ts_max)
+                report["rows"] += int(len(cleaned))
             station_ids.add(key[0])
-            missing_count += int(cleaned["value"].isna().sum())
+            missing_scale = expand_cfg["seconds"] if expand_cfg else 1
+            missing_count += int(cleaned["value"].isna().sum()) * missing_scale
             outlier_count += sum(
                 1
                 for flags in cleaned["quality_flags"].tolist()
                 if isinstance(flags, dict) and flags.get("is_outlier")
-            )
+            ) * missing_scale
             before_vals = before_values[~np.isnan(before_values)]
             _update_sum_stats(before_stats, before_vals)
             after_vals = cleaned["value"].to_numpy(dtype=float, copy=False)
             after_vals = after_vals[~np.isnan(after_vals)]
             _update_sum_stats(after_stats, after_vals)
-            part_counters = write_parquet_partitioned(
-                cleaned,
-                output_base,
-                config,
-                part_counters=part_counters,
-            )
+            if not expand_cfg:
+                part_counters = write_parquet_partitioned(
+                    cleaned,
+                    output_base,
+                    config,
+                    part_counters=part_counters,
+                )
     finally:
         pass
 
@@ -519,7 +637,7 @@ def run_standard(
             reports["aef"] = report
             filter_reports["aef"] = filter_effect
 
-    seismic_df = _seismic_features(base_dir, config, output_paths.raw, max_rows, params_hash)
+    seismic_df = _seismic_features(config, output_paths, max_rows, params_hash)
     if not seismic_df.empty:
         seismic_dir = output_paths.standard / "source=seismic"
         if seismic_dir.exists():

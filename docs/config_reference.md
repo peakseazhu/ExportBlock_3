@@ -23,11 +23,21 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 - 典型场景与示例：数据目录移动到 `data/geomag` 时设为 `"data/geomag"`。
 - 注意事项：路径不存在会导致无数据进入后续阶段。
 
-#### paths.geomag.patterns
-- 类型/必填/默认/范围：string[]，必填；默认 `["*.min","*.sec"]`（demo 仅 `["*.min"]`）；glob 模式。
-- 作用与影响/读取位置：控制地磁文件扫描范围；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`。
-- 典型场景与示例：只处理分钟数据时设为 `["*.min"]`。
-- 注意事项：模式过宽会误扫无关文件，过窄会漏数据。
+#### paths.geomag.sec_patterns
+- 类型/必填/默认/范围：string[]，可选；默认 `["*.sec"]`；glob 模式。
+- 作用与影响/读取位置：秒级地磁文件扫描范围；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`。
+- 典型场景与示例：只读取秒级时保持默认；如文件后缀不同可改为 `["*.SEC"]`。
+- 注意事项：与 `read_mode` 联动，未启用时不会被读取。
+#### paths.geomag.min_patterns
+- 类型/必填/默认/范围：string[]，可选；默认 `["*.min"]`；glob 模式。
+- 作用与影响/读取位置：分钟级地磁文件扫描范围；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`。
+- 典型场景与示例：需要分钟数据时设为 `["*.min"]` 并将 `read_mode` 设为 `min` 或 `both`。
+- 注意事项：分钟与秒级混读会造成时间粒度混杂，建议分开处理。
+#### paths.geomag.read_mode
+- 类型/必填/默认/范围：string，可选；默认 `"sec"`；取值 `sec|min|both`。
+- 作用与影响/读取位置：决定 ingest 读取哪种粒度的地磁数据；`src/pipeline/ingest.py::run_ingest`。
+- 典型场景与示例：秒级分析设为 `"sec"`；仅分钟数据时设为 `"min"`。
+- 注意事项：`both` 会合并输出为同一 source，需自行评估是否接受混合粒度。
 
 #### paths.aef.root
 - 类型/必填/默认/范围：string，必填；默认 `"大气电磁信号/大气电场/kak202001-202010daef.min"`。
@@ -35,27 +45,32 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 - 典型场景与示例：更换 AEF 数据批次时更新为对应目录。
 - 注意事项：AEF 目录通常包含单批次文件，指向上层目录会导致多批次混合。
 
-#### paths.aef.patterns
-- 类型/必填/默认/范围：string[]，必填；默认 `["*.min"]`。
+#### paths.aef.min_patterns
+- 类型/必填/默认/范围：string[]，可选；默认 `["*.min"]`。
 - 作用与影响/读取位置：AEF 文件扫描；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`。
-- 典型场景与示例：若存在秒级 AEF，可扩展为 `["*.min","*.sec"]`。
-- 注意事项：IAGA2002 解析期望匹配格式文件。
+- 典型场景与示例：AEF 仅分钟级时保持默认。
+- 注意事项：若有秒级 AEF，需要显式扩展并调整 `read_mode`。
+#### paths.aef.read_mode
+- 类型/必填/默认/范围：string，可选；默认 `"min"`；取值 `min|sec|both`。
+- 作用与影响/读取位置：决定 ingest 读取哪种粒度的 AEF 数据；`src/pipeline/ingest.py::run_ingest`。
+- 典型场景与示例：分钟数据展开为秒级常量段时保持 `"min"`。
+- 注意事项：`sec`/`both` 仅在存在秒级 AEF 文件时使用。
 
 #### paths.seismic.root
 - 类型/必填/默认/范围：string，必填；默认 `"地震波"`。
-- 作用与影响/读取位置：地震波形与台站元数据目录；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`、`src/pipeline/raw.py::run_raw`。
+- 作用与影响/读取位置：地震波形与台站元数据目录；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`。
 - 典型场景与示例：数据集中在 `data/seismic` 时设为 `"data/seismic"`。
 - 注意事项：若目录下无波形文件，后续地震特征将为空。
 
 #### paths.seismic.mseed_patterns
-- 类型/必填/默认/范围：string[]，必填；默认 `["*.mseed","*.seed"]`（demo 仅 `["*.mseed"]`）。
+- 类型/必填/默认/范围：string[]，必填；默认 `["*.seed"]`。
 - 作用与影响/读取位置：MiniSEED 文件扫描；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`。
-- 典型场景与示例：只保留 `.seed` 时设为 `["*.seed"]`。
-- 注意事项：目录包含大量子目录时建议收窄模式以提高扫描效率。
+- 典型场景与示例：若数据为 `.mseed`，需改为 `["*.mseed"]` 或追加 `["*.seed","*.mseed"]`。
+- 注意事项：只读取秒级波形数据，避免混入分钟级文件。
 
 #### paths.seismic.sac_patterns
 - 类型/必填/默认/范围：string[]，必填；默认 `["*.sac"]`。
-- 作用与影响/读取位置：SAC 文件仅用于原始保留与后续可选使用；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`、`src/pipeline/raw.py::run_raw`。
+- 作用与影响/读取位置：SAC 文件仅用于原始保留与后续可选使用；`src/pipeline/manifest.py::build_manifest`、`src/pipeline/ingest.py::run_ingest`。
 - 典型场景与示例：若无 SAC 文件，可设为 `[]`。
 - 注意事项：SAC 目前不会参与特征提取，仅保存在 ingest 缓存。
 
@@ -195,6 +210,23 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 - 典型场景与示例：预留波形特征化策略切换。
 - 注意事项：现阶段修改不会改变输出。
 
+### seismic
+#### seismic.raw_interval_sec
+- 类型/必填/默认/范围：int，可选；默认 `1`；正整数秒。
+- 作用与影响/读取位置：控制 raw 阶段地震波形按秒聚合的窗口大小；`src/pipeline/raw.py::run_raw`。
+- 典型场景与示例：希望更粗粒度可设为 `2` 或 `5`。
+- 注意事项：过大会降低时序细节，过小可能导致体量过大。
+#### seismic.raw_value_mode
+- 类型/必填/默认/范围：string，可选；默认 `"rms"`；取值 `rms|mean_abs|max_abs`。
+- 作用与影响/读取位置：raw 阶段地震波形的聚合方式；`src/pipeline/raw.py::run_raw`。
+- 典型场景与示例：需要更稳健幅值时用 `mean_abs`。
+- 注意事项：该值会体现在 raw 的 `channel` 后缀中。
+#### seismic.feature_interval_sec
+- 类型/必填/默认/范围：int，可选；默认 `60`；正整数秒。
+- 作用与影响/读取位置：standard 阶段地震波形特征窗口大小；`src/pipeline/standard.py::_seismic_features`。
+- 典型场景与示例：需要更高时间分辨率可设为 `30`。
+- 注意事项：窗口过小会增加计算量。
+
 ### preprocess
 #### preprocess.outlier.method
 - 类型/必填/默认/范围：string，可选；默认 `"zscore"`。
@@ -243,6 +275,24 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 - 作用与影响/读取位置：控制 standard 阶段按批清洗 geomag/aef；`src/pipeline/standard.py::_process_standard_source`。
 - 典型场景与示例：内存紧张时可降到 `20000` 或更低。
 - 注意事项：值过小会降低吞吐；过大可能触发 MemoryError。
+
+#### preprocess.expand_minute_to_seconds
+- 类型/必填/默认/范围：object，可选；默认空；按数据源配置分钟级展开规则。
+- 作用与影响/读取位置：将分钟级数据在 standard 阶段展开为秒级常量段；`src/pipeline/standard.py::_process_standard_source`。
+- 典型场景与示例：AEF 分钟均值需要还原为秒级常量段。
+- 注意事项：会放大数据量，建议配合 `chunk_rows` 控制内存峰值。
+#### preprocess.expand_minute_to_seconds.aef.enabled
+- 类型/必填/默认/范围：bool，可选；默认 `false`。
+- 作用与影响/读取位置：是否启用 AEF 分钟展开；`src/pipeline/standard.py::_process_standard_source`。
+#### preprocess.expand_minute_to_seconds.aef.seconds
+- 类型/必填/默认/范围：int，可选；默认 `60`。
+- 作用与影响/读取位置：每条分钟记录展开的秒数；`src/pipeline/standard.py::_process_standard_source`。
+#### preprocess.expand_minute_to_seconds.aef.mode
+- 类型/必填/默认/范围：string，可选；默认 `"centered"`；取值 `centered|left`。
+- 作用与影响/读取位置：时间戳扩展方式；`centered` 表示以分钟时间为中心扩展。
+#### preprocess.expand_minute_to_seconds.aef.chunk_rows
+- 类型/必填/默认/范围：int，可选；默认 `2000`。
+- 作用与影响/读取位置：分钟展开的分块行数，降低内存峰值；`src/pipeline/standard.py::_process_standard_source`。
 
 ### link
 #### link.spatial_km

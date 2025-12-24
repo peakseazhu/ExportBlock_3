@@ -19,6 +19,20 @@ def _collect_files(root: Path, patterns: List[str], max_files: int | None) -> Li
     return files
 
 
+def _resolve_iaga_patterns(cfg: Dict[str, Any]) -> List[str]:
+    read_mode = str(cfg.get("read_mode", "")).lower()
+    sec_patterns = cfg.get("sec_patterns")
+    min_patterns = cfg.get("min_patterns")
+    if sec_patterns or min_patterns:
+        if read_mode == "min":
+            return list(min_patterns or [])
+        if read_mode == "both":
+            return list((sec_patterns or []) + (min_patterns or []))
+        return list(sec_patterns or [])
+    patterns = cfg.get("patterns") or []
+    return list(patterns)
+
+
 def build_manifest(
     base_dir: Path,
     config: Dict[str, Any],
@@ -34,6 +48,8 @@ def build_manifest(
     for source, cfg in paths_cfg.items():
         root = base_dir / cfg.get("root", "")
         patterns = cfg.get("patterns") or []
+        if source in {"geomag", "aef"}:
+            patterns = _resolve_iaga_patterns(cfg)
         if source == "seismic":
             patterns = list(cfg.get("mseed_patterns", [])) + list(cfg.get("sac_patterns", []))
             stationxml = cfg.get("stationxml")

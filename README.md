@@ -16,8 +16,9 @@ Place data in the repository root using the existing directory names:
 ```
 
 Supported formats:
-- Geomag/AEF: IAGA2002 `*.min` / `*.sec`
-- Seismic: MiniSEED + StationXML, SAC optional
+- Geomag: IAGA2002 `*.sec` (minute files can be enabled via `paths.geomag.read_mode`)
+- AEF: IAGA2002 `*.min` (minute values can be expanded to seconds in standard stage)
+- Seismic: MiniSEED `*.seed` + StationXML (optional `.mseed` via config), SAC optional
 - VLF: CDF frequency product (see `plan_final_revised_v9.md` for variable names)
 
 ## Installation
@@ -86,17 +87,6 @@ storage:
   parquet:
     batch_rows: 30000
 ```
-如需临时覆盖，可使用环境变量（可选）：
-PowerShell 
-```bash
-$env:PARQUET_BATCH_ROWS = "80000"
-python scripts/pipeline_run.py --stages manifest,ingest,raw,standard,spatial,link,features,model,plots --config configs/default.yaml --event_id eq_20200912_024411
-```
-cmd 用法（可选）：
-```bash
-set PARQUET_BATCH_ROWS=80000
-python scripts/pipeline_run.py --stages manifest,ingest,raw,standard,spatial,link,features,model,plots --config configs/default.yaml --event_id eq_20200912_024411
-```
 Finalize and bundle:
 
 ```bash
@@ -118,8 +108,10 @@ Key outputs:
 ```
 outputs/manifests/                             # manifest json
 outputs/ingest/                                # ingest parquet
+outputs/ingest/seismic_files/                  # seismic waveform cache (not for API query)
 outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
 outputs/raw/vlf_catalog.parquet
+outputs/raw/vlf/                               # VLF Zarr cubes (raw spectrogram)
 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
 outputs/linked/<event_id>/aligned.parquet
 outputs/features/<event_id>/features.parquet
@@ -134,14 +126,16 @@ outputs/events/<event_id>/event_bundle.zip
 Run API:
 
 ```bash
-uvicorn src.api.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn src.api.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Example queries:
-
 ```
 GET /raw/summary?source=geomag
 GET /raw/query?source=geomag&start=2020-01-31&end=2020-02-01
+GET /raw/query?source=aef&start=2020-09-10&end=2020-09-12
+GET /raw/query?source=seismic&start=2020-09-10&end=2020-09-12&station_id=NET.STA..BHZ
+GET /raw/query?source=vlf&start=2020-09-10T00:00:00Z&end=2020-09-11T00:00:00Z
 GET /standard/query?source=geomag&lat_min=30&lat_max=40&lon_min=130&lon_max=150
 GET /events
 GET /events/<event_id>/linked
@@ -152,6 +146,7 @@ GET /events/<event_id>/export?format=csv&start=...&end=...
 ```
 
 Time parameters (`start`/`end`) accept ISO8601, date-only (`YYYY-MM-DD`), or Unix epoch seconds/milliseconds.
+`source=vlf` returns catalog rows (`ts_start_ns`/`ts_end_ns`) rather than long-table samples.
 
 UI:
 - `GET /ui`

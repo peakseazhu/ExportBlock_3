@@ -4,17 +4,19 @@ pipeline:
 paths:
   geomag:
     root: "地磁"
-    patterns:
-      - "*.min"
+    sec_patterns:
       - "*.sec"
+    min_patterns:
+      - "*.min"
+    read_mode: "sec"
   aef:
     root: "大气电磁信号/大气电场/kak202001-202010daef.min"
-    patterns:
+    min_patterns:
       - "*.min"
+    read_mode: "min"
   seismic:
     root: "地震波"
     mseed_patterns:
-      - "*.mseed"
       - "*.seed"
     sac_patterns:
       - "*.sac"
@@ -52,6 +54,11 @@ time:
     aef_min: "no_interpolate"
     seismic_waveform: "feature_then_align"
 
+seismic:
+  raw_interval_sec: 1
+  raw_value_mode: "rms"
+  feature_interval_sec: 60
+
 preprocess:
   outlier:
     method: "zscore"
@@ -64,6 +71,12 @@ preprocess:
     method: "rolling_mean"
     window: 5
   batch_rows: 30000
+  expand_minute_to_seconds:
+    aef:
+      enabled: true
+      seconds: 60
+      mode: "centered"
+      chunk_rows: 2000
 
 link:
   spatial_km: 1000

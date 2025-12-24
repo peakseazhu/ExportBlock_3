@@ -122,15 +122,11 @@ def _load_json(path: Path) -> dict:
 
 
 def _build_partition_filter(
-    source_path: Path,
+    fields: set[str],
     start_ms: Optional[int],
     end_ms: Optional[int],
     station_id: Optional[str],
 ) -> Optional[ds.Expression]:
-    if not source_path.exists():
-        return None
-    dataset = ds.dataset(source_path, format="parquet", partitioning="hive")
-    fields = set(dataset.schema.names)
     expr = None
     if station_id and "station_id" in fields:
         expr = ds.field("station_id") == station_id
@@ -146,6 +142,68 @@ def _build_partition_filter(
         if end_date:
             expr = (expr & (ds.field("date") <= end_date)) if expr is not None else ds.field("date") <= end_date
     return expr
+
+
+def _build_row_filter(
+    fields: set[str],
+    start_ms: Optional[int],
+    end_ms: Optional[int],
+    station_id: Optional[str],
+    lat_min: Optional[float],
+    lat_max: Optional[float],
+    lon_min: Optional[float],
+    lon_max: Optional[float],
+) -> Optional[ds.Expression]:
+    expr = None
+    if station_id and "station_id" in fields:
+        expr = ds.field("station_id") == station_id
+    if (start_ms is not None or end_ms is not None) and "ts_ms" in fields:
+        if start_ms is not None:
+            expr = (expr & (ds.field("ts_ms") >= start_ms)) if expr is not None else ds.field("ts_ms") >= start_ms
+        if end_ms is not None:
+            expr = (expr & (ds.field("ts_ms") <= end_ms)) if expr is not None else ds.field("ts_ms") <= end_ms
+    if (start_ms is not None or end_ms is not None) and {"starttime", "endtime"}.issubset(fields):
+        start_ts = pd.to_datetime(start_ms, unit="ms", utc=True) if start_ms is not None else None
+        end_ts = pd.to_datetime(end_ms, unit="ms", utc=True) if end_ms is not None else None
+        if start_ts is not None:
+            expr = (expr & (ds.field("endtime") >= start_ts)) if expr is not None else ds.field("endtime") >= start_ts
+        if end_ts is not None:
+            expr = (expr & (ds.field("starttime") <= end_ts)) if expr is not None else ds.field("starttime") <= end_ts
+    if lat_min is not None and "lat" in fields:
+        expr = (expr & (ds.field("lat") >= lat_min)) if expr is not None else ds.field("lat") >= lat_min
+    if lat_max is not None and "lat" in fields:
+        expr = (expr & (ds.field("lat") <= lat_max)) if expr is not None else ds.field("lat") <= lat_max
+    if lon_min is not None and "lon" in fields:
+        expr = (expr & (ds.field("lon") >= lon_min)) if expr is not None else ds.field("lon") >= lon_min
+    if lon_max is not None and "lon" in fields:
+        expr = (expr & (ds.field("lon") <= lon_max)) if expr is not None else ds.field("lon") <= lon_max
+    return expr
+
+
+def _combine_filters(*filters: Optional[ds.Expression]) -> Optional[ds.Expression]:
+    expr = None
+    for item in filters:
+        if item is None:
+            continue
+        expr = (expr & item) if expr is not None else item
+    return expr
+
+
+def _dataset_fields(path: Path) -> set[str]:
+    dataset = ds.dataset(path, format="parquet", partitioning="hive")
+    return set(dataset.schema.names)
+
+
+def _summarize_vlf_catalog(df: pd.DataFrame) -> dict:
+    summary = {"rows": int(len(df)), "columns": list(df.columns)}
+    if df.empty:
+        return summary
+    if "ts_start_ns" in df.columns and "ts_end_ns" in df.columns:
+        ts_min = pd.to_datetime(df["ts_start_ns"].min(), unit="ns", utc=True)
+        ts_max = pd.to_datetime(df["ts_end_ns"].max(), unit="ns", utc=True)
+        summary["ts_min_utc"] = _format_utc(ts_min)
+        summary["ts_max_utc"] = _format_utc(ts_max)
+    return summary
 
 
 @app.get("/health")
@@ -166,17 +224,39 @@ def raw_query(
     limit: int = 5000,
     response: Response = None,
 ):
-    source_path = OUTPUT_ROOT / "raw" / f"source={source}"
-    if not source_path.exists():
-        raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
     start_ms = _parse_time(start)
     end_ms = _parse_time(end)
-    filters = _build_partition_filter(source_path, start_ms, end_ms, station_id)
-    df = read_parquet_filtered(source_path, filters=filters)
-    summary = _summarize_df(
-        read_parquet_filtered(source_path, filters=filters, columns=["ts_ms", "starttime", "endtime"])
-    )
-    filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
+
+    if source == "vlf":
+        catalog_path = OUTPUT_ROOT / "raw" / "vlf_catalog.parquet"
+        if not catalog_path.exists():
+            raise HTTPException(status_code=404, detail="vlf_catalog.parquet not found")
+        df = pd.read_parquet(catalog_path)
+        if station_id:
+            df = df[df["station_id"] == station_id]
+        if start_ms is not None:
+            start_ns = start_ms * 1_000_000
+            df = df[df["ts_end_ns"] >= start_ns]
+        if end_ms is not None:
+            end_ns = end_ms * 1_000_000
+            df = df[df["ts_start_ns"] <= end_ns]
+        if limit:
+            df = df.head(limit)
+        summary = _summarize_vlf_catalog(df)
+        filtered = df
+    else:
+        source_path = OUTPUT_ROOT / "raw" / f"source={source}"
+        if not source_path.exists():
+            raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
+        fields = _dataset_fields(source_path)
+        partition_filter = _build_partition_filter(fields, start_ms, end_ms, station_id)
+        row_filter = _build_row_filter(
+            fields, start_ms, end_ms, station_id, lat_min, lat_max, lon_min, lon_max
+        )
+        combined = _combine_filters(partition_filter, row_filter)
+        df = read_parquet_filtered(source_path, filters=combined, limit=limit)
+        summary = _summarize_df(df)
+        filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
     if response is not None:
         response.headers["X-Result-Count"] = str(len(filtered))
         response.headers["X-Source-Rows"] = str(summary["rows"])
@@ -207,11 +287,14 @@ def standard_query(
         raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
     start_ms = _parse_time(start)
     end_ms = _parse_time(end)
-    filters = _build_partition_filter(source_path, start_ms, end_ms, station_id)
-    df = read_parquet_filtered(source_path, filters=filters)
-    summary = _summarize_df(
-        read_parquet_filtered(source_path, filters=filters, columns=["ts_ms", "starttime", "endtime"])
+    fields = _dataset_fields(source_path)
+    partition_filter = _build_partition_filter(fields, start_ms, end_ms, station_id)
+    row_filter = _build_row_filter(
+        fields, start_ms, end_ms, station_id, lat_min, lat_max, lon_min, lon_max
     )
+    combined = _combine_filters(partition_filter, row_filter)
+    df = read_parquet_filtered(source_path, filters=combined, limit=limit)
+    summary = _summarize_df(df)
     filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
     if response is not None:
         response.headers["X-Result-Count"] = str(len(filtered))
@@ -227,11 +310,20 @@ def standard_query(
 
 @app.get("/raw/summary")
 def raw_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
-    source_path = OUTPUT_ROOT / "raw" / f"source={source}"
-    if not source_path.exists():
-        raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
-    df = read_parquet_filtered(source_path, columns=["ts_ms", "starttime", "endtime"])
-    summary = _summarize_df(df)
+    if source == "vlf":
+        catalog_path = OUTPUT_ROOT / "raw" / "vlf_catalog.parquet"
+        if not catalog_path.exists():
+            raise HTTPException(status_code=404, detail="vlf_catalog.parquet not found")
+        df = pd.read_parquet(catalog_path)
+        summary = _summarize_vlf_catalog(df)
+    else:
+        source_path = OUTPUT_ROOT / "raw" / f"source={source}"
+        if not source_path.exists():
+            raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
+        fields = _dataset_fields(source_path)
+        summary_cols = [col for col in ["ts_ms", "starttime", "endtime"] if col in fields]
+        df = read_parquet_filtered(source_path, columns=summary_cols)
+        summary = _summarize_df(df)
     summary["source"] = source
     summary["stage"] = "raw"
     return summary
@@ -242,7 +334,9 @@ def standard_summary(source: str = Query(..., description="geomag|aef|seismic|vl
     source_path = OUTPUT_ROOT / "standard" / f"source={source}"
     if not source_path.exists():
         raise HTTPException(status_code=404, detail=f"Standard source not found: {source}")
-    df = read_parquet_filtered(source_path, columns=["ts_ms", "starttime", "endtime"])
+    fields = _dataset_fields(source_path)
+    summary_cols = [col for col in ["ts_ms", "starttime", "endtime"] if col in fields]
+    df = read_parquet_filtered(source_path, columns=summary_cols)
     summary = _summarize_df(df)
     summary["source"] = source
     summary["stage"] = "standard"
