@@ -65,7 +65,7 @@ python scripts/pipeline_run.py   --stages manifest,ingest,raw,standard,spatial,l
 ```
 manifest：扫描数据文件并生成清单（审计/可追溯），写入 outputs/manifests。
 ingest：解析原始数据为结构化表；IAGA/AEF/地震索引写入 outputs/ingest，地震波形缓存到 outputs/ingest/seismic_files，VLF 频谱写入 outputs/raw/vlf。
-raw：生成原始文件索引，写入 outputs/raw/index/source=<source>/data.parquet，用于 raw 查询。
+raw：生成原始文件索引，写入 outputs/raw/index/source=<source>/station_id=<id>/part-*.parquet，用于 raw 查询。
 standard：清洗/插值/滤波并生成标准化表，按相同分区写入 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet。
 spatial：生成站点空间索引与报告，写入 outputs/reports/spatial_index。
 link：按事件窗口与空间半径对齐/筛选，写入 outputs/linked/<event_id>。
@@ -96,7 +96,7 @@ python scripts/make_event_bundle.py --event_id eq_20200101_000000
 outputs/manifests/                             # manifest json
 outputs/ingest/                                # ingest parquet
 outputs/ingest/seismic_files/                  # seismic waveform cache (not for API query)
-outputs/raw/index/source=<source>/data.parquet # raw index for original files
+outputs/raw/index/source=<source>/station_id=<id>/part-*.parquet # raw index for original files
 outputs/raw/vlf_catalog.parquet
 outputs/raw/vlf/                               # VLF Zarr cubes (raw spectrogram)
 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
@@ -123,13 +123,16 @@ GET /raw/query?source=geomag&start=2020-01-31&end=2020-02-01
 GET /raw/query?source=aef&start=2020-09-10&end=2020-09-12
 GET /raw/query?source=seismic&start=2020-09-10&end=2020-09-12&station_id=NET.STA..BHZ
 GET /raw/query?source=vlf&start=2020-09-10T00:00:00Z&end=2020-09-11T00:00:00Z
+GET /raw/vlf/slice?station_id=KAK&start=2020-09-10T00:00:00Z&end=2020-09-10T01:00:00Z&max_time=200&max_freq=128
 GET /standard/query?source=geomag&lat_min=30&lat_max=40&lon_min=130&lon_max=150
 GET /events
 GET /events/<event_id>/linked
 GET /events/<event_id>/features
 GET /events/<event_id>/anomaly
 GET /events/<event_id>/plots?kind=aligned_timeseries
-GET /events/<event_id>/export?format=csv&start=...&end=...
+GET /events/<event_id>/export?format=csv&include_raw=true
+GET /events/<event_id>/seismic/export?format=csv
+GET /events/<event_id>/vlf/export?station_id=KAK&format=json
 ```
 
 时间参数说明：支持 ISO8601、日期简写（YYYY-MM-DD）或 Unix 时间戳（秒/毫秒）。

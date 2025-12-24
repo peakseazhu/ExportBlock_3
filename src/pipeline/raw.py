@@ -8,7 +8,7 @@ import pandas as pd
 
 from src.dq.reporting import write_dq_report
 from src.io.iaga2002 import resolve_iaga_patterns, scan_iaga_file
-from src.store.parquet import read_parquet, write_parquet_configured
+from src.store.parquet import read_parquet, write_parquet_partitioned
 from src.utils import ensure_dir, write_json
 
 
@@ -34,7 +34,7 @@ def _write_index(df: pd.DataFrame, output_dir: Path, config: Dict[str, Any]) -> 
     if output_dir.exists():
         shutil.rmtree(output_dir)
     ensure_dir(output_dir)
-    write_parquet_configured(df, output_dir, config, partition_cols=None)
+    write_parquet_partitioned(df, output_dir, config, partition_cols=["station_id"])
 
 
 def run_raw(

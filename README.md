@@ -109,7 +109,7 @@ Key outputs:
 outputs/manifests/                             # manifest json
 outputs/ingest/                                # ingest parquet
 outputs/ingest/seismic_files/                  # seismic waveform cache (not for API query)
-outputs/raw/index/source=<source>/data.parquet # raw index for original files
+outputs/raw/index/source=<source>/station_id=<id>/part-*.parquet # raw index for original files
 outputs/raw/vlf_catalog.parquet
 outputs/raw/vlf/                               # VLF Zarr cubes (raw spectrogram)
 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
@@ -129,25 +129,29 @@ Run API:
 uvicorn src.api.app:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Example queries:
-```
-GET /raw/summary?source=geomag
-GET /raw/query?source=geomag&start=2020-01-31&end=2020-02-01
-GET /raw/query?source=aef&start=2020-09-10&end=2020-09-12
-GET /raw/query?source=seismic&start=2020-09-10&end=2020-09-12&station_id=NET.STA..BHZ
-GET /raw/query?source=vlf&start=2020-09-10T00:00:00Z&end=2020-09-11T00:00:00Z
-GET /standard/query?source=geomag&lat_min=30&lat_max=40&lon_min=130&lon_max=150
-GET /events
-GET /events/<event_id>/linked
-GET /events/<event_id>/features
-GET /events/<event_id>/anomaly
-GET /events/<event_id>/plots?kind=aligned_timeseries
-GET /events/<event_id>/export?format=csv&start=...&end=...
-```
+  Example queries:
+  ```
+  GET /raw/summary?source=geomag
+  GET /raw/query?source=geomag&start=2020-01-31&end=2020-02-01
+  GET /raw/query?source=aef&start=2020-09-10&end=2020-09-12
+  GET /raw/query?source=seismic&start=2020-09-10&end=2020-09-12&station_id=NET.STA..BHZ
+  GET /raw/query?source=vlf&start=2020-09-10T00:00:00Z&end=2020-09-11T00:00:00Z
+  GET /raw/vlf/slice?station_id=KAK&start=2020-09-10T00:00:00Z&end=2020-09-10T01:00:00Z&max_time=200&max_freq=128
+  GET /standard/query?source=geomag&lat_min=30&lat_max=40&lon_min=130&lon_max=150
+  GET /events
+  GET /events/<event_id>/linked
+  GET /events/<event_id>/features
+  GET /events/<event_id>/anomaly
+  GET /events/<event_id>/plots?kind=aligned_timeseries
+  GET /events/<event_id>/export?format=csv&include_raw=true
+  GET /events/<event_id>/seismic/export?format=csv
+  GET /events/<event_id>/vlf/export?station_id=KAK&format=json
+  ```
 
-Time parameters (`start`/`end`) accept ISO8601, date-only (`YYYY-MM-DD`), or Unix epoch seconds/milliseconds.
-`source=vlf` returns catalog rows (`ts_start_ns`/`ts_end_ns`) rather than long-table samples.
-Raw queries read original files by index; large windows should pass `limit` or narrower time ranges.
+  Time parameters (`start`/`end`) accept ISO8601, date-only (`YYYY-MM-DD`), or Unix epoch seconds/milliseconds.
+  `source=vlf` returns catalog rows (`ts_start_ns`/`ts_end_ns`) rather than long-table samples.
+  `/raw/vlf/slice` returns downsampled spectrogram slices for small windows.
+  Raw queries read original files by index; large windows should pass `limit` or narrower time ranges.
 
 UI:
 - `GET /ui`

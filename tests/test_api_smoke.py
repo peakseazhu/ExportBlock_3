@@ -66,7 +66,8 @@ def test_api_smoke(tmp_path: Path):
             }
         ]
     )
-    index_df.to_parquet(raw_index_dir / "data.parquet", index=False)
+    index_cfg = {"storage": {"parquet": {"partition_cols": ["station_id"], "batch_rows": 100000}}}
+    write_parquet_partitioned(index_df, raw_index_dir, index_cfg)
 
     os.environ["OUTPUT_ROOT"] = str(output_root)
     import src.api.app as app_module
