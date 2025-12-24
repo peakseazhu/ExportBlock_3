@@ -73,6 +73,9 @@ Stage meanings (short):
 Run all stages (demo):
 
 ```bash
+
+python scripts/pipeline_run.py --stages manifest,ingest,raw,standard,spatial,link,features,model,plots --config configs/default.yaml --event_id eq_20200912_024411
+
 python scripts/pipeline_run.py \
   --stages manifest,ingest,raw,standard,spatial,link,features,model,plots \
   --config configs/demo.yaml \

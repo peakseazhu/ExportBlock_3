@@ -152,10 +152,12 @@ def _raw_index_dir(source: str) -> Path:
     return OUTPUT_ROOT / "raw" / "index" / f"source={source}"
 
 
-def _load_raw_index(source: str) -> pd.DataFrame:
+def _load_raw_index(source: str, station_id: Optional[str] = None) -> pd.DataFrame:
     index_dir = _raw_index_dir(source)
     if not index_dir.exists():
         raise HTTPException(status_code=404, detail=f"Raw index not found: {source}")
+    if station_id:
+        return read_parquet_filtered(index_dir, filters=ds.field("station_id") == station_id)
     return read_parquet(index_dir)
 
 
@@ -283,7 +285,7 @@ def _event_window_ms(
 def _collect_seismic_raw(
     start_ms: Optional[int], end_ms: Optional[int], station_id: Optional[str], limit: int
 ) -> pd.DataFrame:
-    index_df = _load_raw_index("seismic")
+    index_df = _load_raw_index("seismic", station_id)
     filtered_index = _filter_index(index_df, start_ms, end_ms, station_id, None, None, None, None)
     if filtered_index.empty:
         return pd.DataFrame()
@@ -474,7 +476,7 @@ def raw_query(
     start_ms = _parse_time(start)
     end_ms = _parse_time(end)
 
-    index_df = _load_raw_index(source)
+    index_df = _load_raw_index(source, station_id)
 
     if source == "vlf":
         df = index_df
@@ -580,7 +582,7 @@ def raw_vlf_slice(
     end_ms = _parse_time(end)
     start_ns = start_ms * 1_000_000 if start_ms is not None else None
     end_ns = end_ms * 1_000_000 if end_ms is not None else None
-    index_df = _load_raw_index("vlf")
+    index_df = _load_raw_index("vlf", station_id)
     payload = _collect_vlf_slice(
         index_df,
         station_id,
@@ -762,7 +764,7 @@ def export_event_vlf(
     start_ms, end_ms, _ = _event_window_ms(event_id, start, end)
     start_ns = start_ms * 1_000_000 if start_ms is not None else None
     end_ns = end_ms * 1_000_000 if end_ms is not None else None
-    index_df = _load_raw_index("vlf")
+    index_df = _load_raw_index("vlf", station_id)
     payload = _collect_vlf_slice(
         index_df,
         station_id,

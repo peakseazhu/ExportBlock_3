@@ -61,6 +61,8 @@ manifest -> ingest -> raw -> standard -> spatial -> link -> features -> model ->
 运行所有阶段（演示）：
 
 ```bash
+python scripts/pipeline_run.py --stages manifest,ingest,raw,standard,spatial,link,features,model,plots --config configs/default.yaml --event_id eq_20200912_024411
+
 python scripts/pipeline_run.py   --stages manifest,ingest,raw,standard,spatial,link,features,model,plots   --config configs/demo.yaml   --event_id eq_20200101_000000
 ```
 manifest：扫描数据文件并生成清单（审计/可追溯），写入 outputs/manifests。
