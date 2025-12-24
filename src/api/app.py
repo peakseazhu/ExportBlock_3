@@ -843,7 +843,11 @@ def export_event(
     bundle_path = export_dir / "export_bundle.zip"
     manifest = {"aligned": export_path.name, "seismic_raw": None, "vlf_raw": None, "notes": []}
 
-    seismic_df = _collect_seismic_raw(start_ms, end_ms, None, raw_limit)
+    seismic_df = pd.DataFrame()
+    try:
+        seismic_df = _collect_seismic_raw(start_ms, end_ms, None, raw_limit)
+    except HTTPException:
+        manifest["notes"].append("seismic raw index not found; skip seismic raw")
     if not seismic_df.empty:
         if raw_seismic_format == "hdf5":
             seismic_path = export_dir / "seismic_raw.h5"
@@ -858,7 +862,12 @@ def export_event(
     else:
         manifest["notes"].append("no seismic raw data in event window")
 
-    vlf_index = _load_raw_index("vlf") if include_raw else None
+    vlf_index = None
+    if include_raw:
+        try:
+            vlf_index = _load_raw_index("vlf")
+        except HTTPException:
+            manifest["notes"].append("vlf raw index not found; skip vlf raw")
     vlf_payload = None
     if vlf_index is not None and raw_vlf_station_id is None:
         stations = vlf_index["station_id"].dropna().unique().tolist()
