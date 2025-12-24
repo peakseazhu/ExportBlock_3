@@ -211,16 +211,6 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 - 注意事项：现阶段修改不会改变输出。
 
 ### seismic
-#### seismic.raw_interval_sec
-- 类型/必填/默认/范围：int，可选；默认 `1`；正整数秒。
-- 作用与影响/读取位置：控制 raw 阶段地震波形按秒聚合的窗口大小；`src/pipeline/raw.py::run_raw`。
-- 典型场景与示例：希望更粗粒度可设为 `2` 或 `5`。
-- 注意事项：过大会降低时序细节，过小可能导致体量过大。
-#### seismic.raw_value_mode
-- 类型/必填/默认/范围：string，可选；默认 `"rms"`；取值 `rms|mean_abs|max_abs`。
-- 作用与影响/读取位置：raw 阶段地震波形的聚合方式；`src/pipeline/raw.py::run_raw`。
-- 典型场景与示例：需要更稳健幅值时用 `mean_abs`。
-- 注意事项：该值会体现在 raw 的 `channel` 后缀中。
 #### seismic.feature_interval_sec
 - 类型/必填/默认/范围：int，可选；默认 `60`；正整数秒。
 - 作用与影响/读取位置：standard 阶段地震波形特征窗口大小；`src/pipeline/standard.py::_seismic_features`。
@@ -354,9 +344,9 @@ python scripts/pipeline_run.py --config configs/demo.yaml --stages manifest,inge
 
 #### storage.parquet.partition_cols
 - 类型/必填/默认/范围：string[]，可选；默认 `["station_id","date"]`。
-- 作用与影响/读取位置：控制 Raw/Standard 长表分区；`src/store/parquet.py::write_parquet_partitioned`、`src/pipeline/raw.py::run_raw`、`src/pipeline/standard.py::_process_standard_source`。
-- 典型场景与示例：默认输出 `outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet`。
-- 注意事项：`date` 由 `ts_ms`（或 seismic 的 `starttime`）派生；修改分区需同步调整读取路径。
+- 作用与影响/读取位置：控制 Standard 长表分区；`src/store/parquet.py::write_parquet_partitioned`、`src/pipeline/standard.py::_process_standard_source`。
+- 典型场景与示例：默认输出 `outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet`。
+- 注意事项：`date` 由 `ts_ms` 派生；修改分区需同步调整读取路径。
 
 #### storage.parquet.batch_rows
 - 类型/必填/默认/范围：int，可选；默认 `30000`（demo 为 `20000`）；正整数。

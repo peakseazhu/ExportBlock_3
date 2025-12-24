@@ -55,8 +55,6 @@ time:
     seismic_waveform: "feature_then_align"
 
 seismic:
-  raw_interval_sec: 1
-  raw_value_mode: "rms"
   feature_interval_sec: 60
 
 preprocess:

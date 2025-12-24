@@ -65,7 +65,7 @@ python scripts/pipeline_run.py   --stages manifest,ingest,raw,standard,spatial,l
 ```
 manifest：扫描数据文件并生成清单（审计/可追溯），写入 outputs/manifests。
 ingest：解析原始数据为结构化表；IAGA/AEF/地震索引写入 outputs/ingest，地震波形缓存到 outputs/ingest/seismic_files，VLF 频谱写入 outputs/raw/vlf。
-raw：把 ingest 数据标记为 raw 并按 station/date 分区写入 outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet。
+raw：生成原始文件索引，写入 outputs/raw/index/source=<source>/data.parquet，用于 raw 查询。
 standard：清洗/插值/滤波并生成标准化表，按相同分区写入 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet。
 spatial：生成站点空间索引与报告，写入 outputs/reports/spatial_index。
 link：按事件窗口与空间半径对齐/筛选，写入 outputs/linked/<event_id>。
@@ -96,7 +96,7 @@ python scripts/make_event_bundle.py --event_id eq_20200101_000000
 outputs/manifests/                             # manifest json
 outputs/ingest/                                # ingest parquet
 outputs/ingest/seismic_files/                  # seismic waveform cache (not for API query)
-outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
+outputs/raw/index/source=<source>/data.parquet # raw index for original files
 outputs/raw/vlf_catalog.parquet
 outputs/raw/vlf/                               # VLF Zarr cubes (raw spectrogram)
 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
@@ -134,6 +134,7 @@ GET /events/<event_id>/export?format=csv&start=...&end=...
 
 时间参数说明：支持 ISO8601、日期简写（YYYY-MM-DD）或 Unix 时间戳（秒/毫秒）。
 `source=vlf` 的 raw 查询返回 catalog 行（`ts_start_ns/ts_end_ns`），不返回长表样本。
+raw 查询会按索引读取原始文件，窗口过大时建议配合 `limit` 或收窄时间范围。
 
 UI：
 - `GET /ui`

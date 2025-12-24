@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import pandas as pd
 import pyarrow.dataset as ds
@@ -10,6 +10,8 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from src.io.iaga2002 import read_iaga_window
+from src.io.seismic import StationMeta, read_mseed_window
 from src.store.parquet import read_parquet_filtered
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -144,6 +146,53 @@ def _build_partition_filter(
     return expr
 
 
+def _raw_index_dir(source: str) -> Path:
+    return OUTPUT_ROOT / "raw" / "index" / f"source={source}"
+
+
+def _load_raw_index(source: str) -> pd.DataFrame:
+    index_dir = _raw_index_dir(source)
+    if not index_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Raw index not found: {source}")
+    return pd.read_parquet(index_dir)
+
+
+def _resolve_raw_file(path_text: str) -> Path:
+    path = Path(path_text)
+    return path if path.is_absolute() else ROOT / path
+
+
+def _filter_index(
+    df: pd.DataFrame,
+    start_ms: Optional[int],
+    end_ms: Optional[int],
+    station_id: Optional[str],
+    lat_min: Optional[float],
+    lat_max: Optional[float],
+    lon_min: Optional[float],
+    lon_max: Optional[float],
+) -> pd.DataFrame:
+    if df.empty:
+        return df
+    filtered = df.copy()
+    if station_id and "station_id" in filtered.columns:
+        filtered = filtered[filtered["station_id"] == station_id]
+    if "start_ms" in filtered.columns and "end_ms" in filtered.columns:
+        if start_ms is not None:
+            filtered = filtered[filtered["end_ms"] >= start_ms]
+        if end_ms is not None:
+            filtered = filtered[filtered["start_ms"] <= end_ms]
+    if lat_min is not None and "lat" in filtered.columns:
+        filtered = filtered[filtered["lat"] >= lat_min]
+    if lat_max is not None and "lat" in filtered.columns:
+        filtered = filtered[filtered["lat"] <= lat_max]
+    if lon_min is not None and "lon" in filtered.columns:
+        filtered = filtered[filtered["lon"] >= lon_min]
+    if lon_max is not None and "lon" in filtered.columns:
+        filtered = filtered[filtered["lon"] <= lon_max]
+    return filtered
+
+
 def _build_row_filter(
     fields: set[str],
     start_ms: Optional[int],
@@ -227,11 +276,10 @@ def raw_query(
     start_ms = _parse_time(start)
     end_ms = _parse_time(end)
 
+    index_df = _load_raw_index(source)
+
     if source == "vlf":
-        catalog_path = OUTPUT_ROOT / "raw" / "vlf_catalog.parquet"
-        if not catalog_path.exists():
-            raise HTTPException(status_code=404, detail="vlf_catalog.parquet not found")
-        df = pd.read_parquet(catalog_path)
+        df = index_df
         if station_id:
             df = df[df["station_id"] == station_id]
         if start_ms is not None:
@@ -245,18 +293,68 @@ def raw_query(
         summary = _summarize_vlf_catalog(df)
         filtered = df
     else:
-        source_path = OUTPUT_ROOT / "raw" / f"source={source}"
-        if not source_path.exists():
-            raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
-        fields = _dataset_fields(source_path)
-        partition_filter = _build_partition_filter(fields, start_ms, end_ms, station_id)
-        row_filter = _build_row_filter(
-            fields, start_ms, end_ms, station_id, lat_min, lat_max, lon_min, lon_max
-        )
-        combined = _combine_filters(partition_filter, row_filter)
-        df = read_parquet_filtered(source_path, filters=combined, limit=limit)
-        summary = _summarize_df(df)
-        filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
+        filtered_index = _filter_index(index_df, start_ms, end_ms, station_id, lat_min, lat_max, lon_min, lon_max)
+        if filtered_index.empty:
+            summary = {"rows": 0, "columns": []}
+            filtered = pd.DataFrame()
+        else:
+            filtered_index = filtered_index.sort_values("start_ms")
+            remaining = int(limit) if limit else None
+            chunks: List[pd.DataFrame] = []
+            if source in {"geomag", "aef"}:
+                for _, row in filtered_index.iterrows():
+                    if remaining is not None and remaining <= 0:
+                        break
+                    df = read_iaga_window(
+                        _resolve_raw_file(row["file_path"]),
+                        source,
+                        start_ms,
+                        end_ms,
+                        remaining,
+                    )
+                    if df.empty:
+                        continue
+                    df["proc_stage"] = "raw"
+                    df["proc_version"] = row.get("proc_version")
+                    df["params_hash"] = row.get("params_hash")
+                    chunks.append(df)
+                    if remaining is not None:
+                        remaining -= len(df)
+            elif source == "seismic":
+                station_meta = {}
+                for _, row in filtered_index.drop_duplicates(subset=["station_id"]).iterrows():
+                    station_meta[row["station_id"]] = StationMeta(
+                        float(row.get("lat", float("nan"))),
+                        float(row.get("lon", float("nan"))),
+                        float(row.get("elev", float("nan"))),
+                    )
+                for file_path, group in filtered_index.groupby("file_path"):
+                    if remaining is not None and remaining <= 0:
+                        break
+                    station_ids = set(group["station_id"].tolist())
+                    df = read_mseed_window(
+                        _resolve_raw_file(file_path),
+                        start_ms,
+                        end_ms,
+                        station_ids,
+                        remaining,
+                        station_meta,
+                    )
+                    if df.empty:
+                        continue
+                    df["proc_stage"] = "raw"
+                    df["proc_version"] = group["proc_version"].iloc[0] if "proc_version" in group.columns else None
+                    df["params_hash"] = group["params_hash"].iloc[0] if "params_hash" in group.columns else None
+                    chunks.append(df)
+                    if remaining is not None:
+                        remaining -= len(df)
+            if chunks:
+                df = pd.concat(chunks, ignore_index=True)
+                filtered = _filter_df(df, start, end, station_id, lat_min, lat_max, lon_min, lon_max, limit)
+                summary = _summarize_df(df)
+            else:
+                filtered = pd.DataFrame()
+                summary = {"rows": 0, "columns": []}
     if response is not None:
         response.headers["X-Result-Count"] = str(len(filtered))
         response.headers["X-Source-Rows"] = str(summary["rows"])
@@ -310,20 +408,16 @@ def standard_query(
 
 @app.get("/raw/summary")
 def raw_summary(source: str = Query(..., description="geomag|aef|seismic|vlf")):
+    df = _load_raw_index(source)
     if source == "vlf":
-        catalog_path = OUTPUT_ROOT / "raw" / "vlf_catalog.parquet"
-        if not catalog_path.exists():
-            raise HTTPException(status_code=404, detail="vlf_catalog.parquet not found")
-        df = pd.read_parquet(catalog_path)
         summary = _summarize_vlf_catalog(df)
     else:
-        source_path = OUTPUT_ROOT / "raw" / f"source={source}"
-        if not source_path.exists():
-            raise HTTPException(status_code=404, detail=f"Raw source not found: {source}")
-        fields = _dataset_fields(source_path)
-        summary_cols = [col for col in ["ts_ms", "starttime", "endtime"] if col in fields]
-        df = read_parquet_filtered(source_path, columns=summary_cols)
-        summary = _summarize_df(df)
+        summary = {"rows": int(len(df)), "columns": list(df.columns)}
+        if not df.empty and {"start_ms", "end_ms"}.issubset(df.columns):
+            ts_min = pd.to_datetime(df["start_ms"].min(), unit="ms", utc=True)
+            ts_max = pd.to_datetime(df["end_ms"].max(), unit="ms", utc=True)
+            summary["ts_min_utc"] = _format_utc(ts_min)
+            summary["ts_max_utc"] = _format_utc(ts_max)
     summary["source"] = source
     summary["stage"] = "raw"
     return summary

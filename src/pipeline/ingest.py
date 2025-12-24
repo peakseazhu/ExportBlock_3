@@ -13,7 +13,7 @@ import zarr
 
 from src.config import get_event
 from src.dq.reporting import basic_stats, write_dq_report
-from src.io.iaga2002 import parse_iaga_file
+from src.io.iaga2002 import parse_iaga_file, resolve_iaga_patterns
 from src.io.seismic import extract_trace_metadata, join_station_metadata, load_station_metadata
 from src.io.vlf import compute_gap_report, read_vlf_cdf
 from src.store.parquet import write_parquet_configured
@@ -29,20 +29,6 @@ def _collect_files(root: Path, patterns: List[str], max_files: int | None) -> Li
                 if max_files and len(files) >= max_files:
                     return files
     return files
-
-
-def _resolve_iaga_patterns(cfg: Dict[str, Any]) -> List[str]:
-    read_mode = str(cfg.get("read_mode", "")).lower()
-    sec_patterns = cfg.get("sec_patterns")
-    min_patterns = cfg.get("min_patterns")
-    if sec_patterns or min_patterns:
-        if read_mode == "min":
-            return list(min_patterns or [])
-        if read_mode == "both":
-            return list((sec_patterns or []) + (min_patterns or []))
-        return list(sec_patterns or [])
-    patterns = cfg.get("patterns") or []
-    return list(patterns)
 
 
 def _write_preview_png(path: Path, matrix: np.ndarray, max_time: int, max_freq: int) -> None:
@@ -78,7 +64,7 @@ def run_ingest(
 
     # IAGA2002 (geomag)
     geomag_root = base_dir / geomag_cfg.get("root", "")
-    geomag_files = _collect_files(geomag_root, _resolve_iaga_patterns(geomag_cfg), max_files)
+    geomag_files = _collect_files(geomag_root, resolve_iaga_patterns(geomag_cfg), max_files)
     geomag_frames = [
         parse_iaga_file(path, "geomag", params_hash, "ingest", pipeline_version) for path in geomag_files
     ]
@@ -90,7 +76,7 @@ def run_ingest(
 
     # AEF
     aef_root = base_dir / aef_cfg.get("root", "")
-    aef_files = _collect_files(aef_root, _resolve_iaga_patterns(aef_cfg), max_files)
+    aef_files = _collect_files(aef_root, resolve_iaga_patterns(aef_cfg), max_files)
     aef_frames = [parse_iaga_file(path, "aef", params_hash, "ingest", pipeline_version) for path in aef_files]
     aef_df = pd.concat(aef_frames, ignore_index=True) if aef_frames else pd.DataFrame()
     if max_rows:

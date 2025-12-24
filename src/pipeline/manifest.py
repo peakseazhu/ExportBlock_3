@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 from datetime import datetime, timezone
 
+from src.io.iaga2002 import resolve_iaga_patterns
 from src.utils import compute_sha256, utc_now_iso, write_json
 
 
@@ -17,20 +18,6 @@ def _collect_files(root: Path, patterns: List[str], max_files: int | None) -> Li
                 if max_files and len(files) >= max_files:
                     return files
     return files
-
-
-def _resolve_iaga_patterns(cfg: Dict[str, Any]) -> List[str]:
-    read_mode = str(cfg.get("read_mode", "")).lower()
-    sec_patterns = cfg.get("sec_patterns")
-    min_patterns = cfg.get("min_patterns")
-    if sec_patterns or min_patterns:
-        if read_mode == "min":
-            return list(min_patterns or [])
-        if read_mode == "both":
-            return list((sec_patterns or []) + (min_patterns or []))
-        return list(sec_patterns or [])
-    patterns = cfg.get("patterns") or []
-    return list(patterns)
 
 
 def build_manifest(
@@ -49,7 +36,7 @@ def build_manifest(
         root = base_dir / cfg.get("root", "")
         patterns = cfg.get("patterns") or []
         if source in {"geomag", "aef"}:
-            patterns = _resolve_iaga_patterns(cfg)
+            patterns = resolve_iaga_patterns(cfg)
         if source == "seismic":
             patterns = list(cfg.get("mseed_patterns", [])) + list(cfg.get("sac_patterns", []))
             stationxml = cfg.get("stationxml")

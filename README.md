@@ -62,7 +62,7 @@ manifest -> ingest -> raw -> standard -> spatial -> link -> features -> model ->
 Stage meanings (short):
 - manifest: scan files and record manifest metadata.
 - ingest: parse raw files into structured tables (no event filtering).
-- raw: persist structured raw data for `/raw/query`.
+- raw: build raw index for original files to support `/raw/query`.
 - standard: denoise/interpolate/filter and persist cleaned data.
 - spatial: build station index and spatial DQ.
 - link: event window + spatial join into linked dataset.
@@ -109,7 +109,7 @@ Key outputs:
 outputs/manifests/                             # manifest json
 outputs/ingest/                                # ingest parquet
 outputs/ingest/seismic_files/                  # seismic waveform cache (not for API query)
-outputs/raw/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
+outputs/raw/index/source=<source>/data.parquet # raw index for original files
 outputs/raw/vlf_catalog.parquet
 outputs/raw/vlf/                               # VLF Zarr cubes (raw spectrogram)
 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
@@ -147,6 +147,7 @@ GET /events/<event_id>/export?format=csv&start=...&end=...
 
 Time parameters (`start`/`end`) accept ISO8601, date-only (`YYYY-MM-DD`), or Unix epoch seconds/milliseconds.
 `source=vlf` returns catalog rows (`ts_start_ns`/`ts_end_ns`) rather than long-table samples.
+Raw queries read original files by index; large windows should pass `limit` or narrower time ranges.
 
 UI:
 - `GET /ui`

@@ -9,6 +9,7 @@ class OutputPaths:
         self.manifests = root / "manifests"
         self.ingest = root / "ingest"
         self.raw = root / "raw"
+        self.raw_index = self.raw / "index"
         self.standard = root / "standard"
         self.linked = root / "linked"
         self.features = root / "features"
@@ -23,6 +24,7 @@ class OutputPaths:
             self.manifests,
             self.ingest,
             self.raw,
+            self.raw_index,
             self.standard,
             self.linked,
             self.features,

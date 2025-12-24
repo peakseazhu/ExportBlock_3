@@ -474,6 +474,7 @@ def _process_standard_source(
 
                 if to_write.empty:
                     continue
+                to_write = to_write.copy()
                 to_write["proc_stage"] = "standard"
                 to_write["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
                 to_write["params_hash"] = params_hash
@@ -619,19 +620,19 @@ def run_standard(
     reports = {}
     filter_reports = {}
 
-    geomag_raw = output_paths.raw / "source=geomag"
-    if geomag_raw.exists():
+    geomag_ingest = output_paths.ingest / "geomag"
+    if geomag_ingest.exists():
         report, filter_effect = _process_standard_source(
-            "geomag", geomag_raw, output_paths, config, params_hash, max_rows
+            "geomag", geomag_ingest, output_paths, config, params_hash, max_rows
         )
         if report:
             reports["geomag"] = report
             filter_reports["geomag"] = filter_effect
 
-    aef_raw = output_paths.raw / "source=aef"
-    if aef_raw.exists():
+    aef_ingest = output_paths.ingest / "aef"
+    if aef_ingest.exists():
         report, filter_effect = _process_standard_source(
-            "aef", aef_raw, output_paths, config, params_hash, max_rows
+            "aef", aef_ingest, output_paths, config, params_hash, max_rows
         )
         if report:
             reports["aef"] = report

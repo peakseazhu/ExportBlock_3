@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 
 import pandas as pd
-from obspy import read, read_inventory
+from obspy import UTCDateTime, read, read_inventory
 
 
 @dataclass
@@ -46,6 +47,60 @@ def extract_trace_metadata(paths: Iterable[Path]) -> pd.DataFrame:
                     "file_path": str(path),
                 }
             )
+    return pd.DataFrame.from_records(records)
+
+
+def read_mseed_window(
+    path: Path,
+    start_ms: Optional[int],
+    end_ms: Optional[int],
+    station_ids: Optional[Set[str]],
+    limit: Optional[int],
+    station_meta: Dict[str, StationMeta],
+) -> pd.DataFrame:
+    starttime = UTCDateTime(start_ms / 1000) if start_ms is not None else None
+    endtime = UTCDateTime(end_ms / 1000) if end_ms is not None else None
+    stream = read(str(path), starttime=starttime, endtime=endtime)
+    records: List[Dict[str, object]] = []
+    remaining = int(limit) if limit else None
+    for trace in stream:
+        station_id = (
+            f"{trace.stats.network}.{trace.stats.station}.{trace.stats.location or ''}."
+            f"{trace.stats.channel}"
+        )
+        if station_ids and station_id not in station_ids:
+            continue
+        data = trace.data.astype(float)
+        if data.size == 0:
+            continue
+        sr = float(trace.stats.sampling_rate)
+        step = 1
+        if remaining is not None and remaining > 0:
+            step = max(1, int(math.ceil(len(data) / remaining)))
+        start_ts = pd.Timestamp(trace.stats.starttime.datetime, tz="UTC")
+        base_ms = int(start_ts.value // 1_000_000)
+        meta = station_meta.get(station_id)
+        for idx in range(0, len(data), step):
+            ts_ms = base_ms + int((idx / sr) * 1000)
+            records.append(
+                {
+                    "ts_ms": ts_ms,
+                    "source": "seismic",
+                    "station_id": station_id,
+                    "channel": trace.stats.channel,
+                    "value": float(data[idx]),
+                    "lat": meta.lat if meta else float("nan"),
+                    "lon": meta.lon if meta else float("nan"),
+                    "elev": meta.elev if meta else float("nan"),
+                    "quality_flags": {},
+                }
+            )
+            if remaining is not None:
+                remaining -= 1
+                if remaining <= 0:
+                    break
+        if remaining is not None and remaining <= 0:
+            break
     return pd.DataFrame.from_records(records)
 
 

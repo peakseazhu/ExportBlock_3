@@ -11,6 +11,7 @@
 - `GET /standard/summary?source=geomag|aef|seismic|vlf`：返回行数与时间范围（用于确认可查询时间窗）
 补充说明：
 - `source=vlf` 的 raw 查询返回 `vlf_catalog.parquet` 行（包含 `ts_start_ns/ts_end_ns`），不返回长表样本。
+- raw 查询基于 `outputs/raw/index` 索引读取原始文件，窗口过大建议配合 `limit` 或缩小时间范围。
 
 时间参数说明：
 - 支持 ISO8601（如 `2020-01-31T22:40:00Z`）
@@ -19,7 +20,7 @@
 
 查询返回头（raw/standard）：
 - `X-Result-Count`：过滤后行数
-- `X-Source-Rows`：本次扫描返回的行数（受 limit 影响）
+- `X-Source-Rows`：本次返回行数（受 limit 影响）
 - `X-Source-Time-Range`：本次返回数据覆盖范围（UTC）
 
 ## 事件级
