@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
+import time
 from typing import Any, Dict, List
 
 from src.pipeline import stages as stage_impl
@@ -51,10 +53,13 @@ def run_stages(
     params_hash: str,
     strict: bool,
     event_id: str | None,
-) -> None:
+) -> List[Dict[str, Any]]:
     _validate_stage_order(stages)
+    timing_records: List[Dict[str, Any]] = []
     for stage in stages:
         func = STAGE_FUNCS[stage]
+        started = datetime.now(timezone.utc)
+        start_tick = time.perf_counter()
         func(
             base_dir=base_dir,
             config=config,
@@ -64,3 +69,14 @@ def run_stages(
             strict=strict,
             event_id=event_id,
         )
+        end_tick = time.perf_counter()
+        ended = datetime.now(timezone.utc)
+        timing_records.append(
+            {
+                "stage": stage,
+                "start_utc": started.isoformat().replace("+00:00", "Z"),
+                "end_utc": ended.isoformat().replace("+00:00", "Z"),
+                "duration_s": round(end_tick - start_tick, 3),
+            }
+        )
+    return timing_records

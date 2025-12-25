@@ -1,5 +1,6 @@
 import argparse
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -11,7 +12,7 @@ sys.path.append(str(ROOT))
 from src.config import compute_params_hash, load_config
 from src.pipeline.runner import STAGE_ORDER, run_stages
 from src.store.paths import OutputPaths
-from src.utils import ensure_dir
+from src.utils import ensure_dir, write_json
 
 
 def _utc_run_id() -> str:
@@ -58,7 +59,9 @@ def main() -> None:
         )
 
     stages = [stage.strip() for stage in args.stages.split(",") if stage.strip()]
-    run_stages(
+    run_started = datetime.now(timezone.utc)
+    tick = time.perf_counter()
+    stage_timings = run_stages(
         stages=stages,
         base_dir=base_dir,
         config=config,
@@ -68,6 +71,19 @@ def main() -> None:
         strict=args.strict,
         event_id=args.event_id,
     )
+    run_ended = datetime.now(timezone.utc)
+    total_s = round(time.perf_counter() - tick, 3)
+    timing_report = {
+        "run_id": run_id,
+        "start_utc": run_started.isoformat().replace("+00:00", "Z"),
+        "end_utc": run_ended.isoformat().replace("+00:00", "Z"),
+        "duration_s": total_s,
+        "stages": stage_timings,
+    }
+    write_json(output_paths.reports / "runtime_report.json", timing_report)
+    print(f"Run started: {timing_report['start_utc']}")
+    print(f"Run ended:   {timing_report['end_utc']}")
+    print(f"Duration:    {timing_report['duration_s']}s (details in outputs/reports/runtime_report.json)")
 
 
 if __name__ == "__main__":
