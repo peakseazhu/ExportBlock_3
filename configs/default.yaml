@@ -18,6 +18,7 @@ paths:
     root: "地震波"
     mseed_patterns:
       - "*.seed"
+      - "*.mseed"
     sac_patterns:
       - "*.sac"
     stationxml: "地震波/stations_inventory.xml"

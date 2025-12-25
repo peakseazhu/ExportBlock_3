@@ -5,6 +5,7 @@ import zipfile
 from pathlib import Path
 from typing import List, Optional
 
+import numpy as np
 import pandas as pd
 import pyarrow.dataset as ds
 from fastapi import FastAPI, HTTPException, Query, Request, Response
@@ -257,6 +258,34 @@ def _summarize_vlf_catalog(df: pd.DataFrame) -> dict:
         summary["ts_min_utc"] = _format_utc(ts_min)
         summary["ts_max_utc"] = _format_utc(ts_max)
     return summary
+
+
+def _sanitize_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (np.floating, float)):
+        value = float(value)
+        return value if math.isfinite(value) else None
+    if isinstance(value, (np.integer, int)):
+        return int(value)
+    if isinstance(value, (pd.Timestamp, np.datetime64)):
+        return _format_utc(pd.Timestamp(value))
+    if isinstance(value, dict):
+        return {key: _sanitize_value(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_sanitize_value(item) for item in value]
+    return value
+
+
+def _safe_records(df: pd.DataFrame) -> List[dict]:
+    if df.empty:
+        return []
+    cleaned = df.replace([np.inf, -np.inf], np.nan)
+    cleaned = cleaned.astype(object).where(pd.notnull(cleaned), None)
+    records = cleaned.to_dict(orient="records")
+    return [_sanitize_value(record) for record in records]
 
 
 def _event_window_ms(
@@ -564,7 +593,7 @@ def raw_query(
             response.headers["X-Source-Time-Range"] = (
                 f"{summary['start_min_utc']}..{summary['end_max_utc']}"
             )
-    return filtered.to_dict(orient="records")
+    return _safe_records(filtered)
 
 
 @app.get("/raw/vlf/slice")
@@ -596,7 +625,7 @@ def raw_vlf_slice(
     )
     if payload is None:
         raise HTTPException(status_code=404, detail="No VLF slice data found")
-    return payload
+    return _sanitize_value(payload)
 
 
 @app.get("/standard/query")
@@ -635,7 +664,7 @@ def standard_query(
             response.headers["X-Source-Time-Range"] = (
                 f"{summary['start_min_utc']}..{summary['end_max_utc']}"
             )
-    return filtered.to_dict(orient="records")
+    return _safe_records(filtered)
 
 
 @app.get("/raw/summary")
@@ -692,7 +721,7 @@ def get_linked(event_id: str, limit: int = 5000):
     if not path.exists():
         raise HTTPException(status_code=404, detail="aligned.parquet not found")
     df = pd.read_parquet(path)
-    return df.head(limit).to_dict(orient="records")
+    return _safe_records(df.head(limit))
 
 
 @app.get("/events/{event_id}/features")
@@ -701,7 +730,7 @@ def get_features(event_id: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="features.parquet not found")
     df = pd.read_parquet(path)
-    return df.to_dict(orient="records")
+    return _safe_records(df)
 
 
 @app.get("/events/{event_id}/anomaly")
@@ -710,7 +739,7 @@ def get_anomaly(event_id: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="anomaly.parquet not found")
     df = pd.read_parquet(path)
-    return df.to_dict(orient="records")
+    return _safe_records(df)
 
 
 @app.get("/events/{event_id}/plots")
@@ -793,6 +822,7 @@ def export_event_vlf(
         )
     else:
         export_path = export_dir / "vlf_raw.json"
+        payload = _sanitize_value(payload)
         export_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return FileResponse(export_path)
 
@@ -856,7 +886,7 @@ def export_event(
             seismic_df.to_hdf(seismic_path, key="data", mode="w")
         elif raw_seismic_format == "json":
             seismic_path = export_dir / "seismic_raw.json"
-            seismic_path.write_text(seismic_df.to_json(orient="records"), encoding="utf-8")
+            seismic_path.write_text(json.dumps(_safe_records(seismic_df), ensure_ascii=False), encoding="utf-8")
         else:
             seismic_path = export_dir / "seismic_raw.csv"
             seismic_df.to_csv(seismic_path, index=False)
@@ -905,6 +935,7 @@ def export_event(
             )
         else:
             vlf_path = export_dir / "vlf_raw.json"
+            vlf_payload = _sanitize_value(vlf_payload)
             vlf_path.write_text(json.dumps(vlf_payload, ensure_ascii=False), encoding="utf-8")
         manifest["vlf_raw"] = vlf_path.name
     else:
