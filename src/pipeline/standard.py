@@ -190,7 +190,7 @@ def _wavelet_denoise(values: pd.Series, cfg: Dict[str, Any]) -> pd.Series:
     mask = series.isna()
     filled = series.copy()
     filled = filled.interpolate(limit_direction="both")
-    filled = filled.fillna(method="bfill").fillna(method="ffill")
+    filled = filled.bfill().ffill()
     coeffs = pywt.wavedec(filled.to_numpy(), wavelet, mode="periodization", level=max_level)
     detail = coeffs[-1]
     sigma = float(np.median(np.abs(detail)) / 0.6745) if detail.size else 0.0
@@ -614,14 +614,34 @@ def _vlf_features(config: Dict[str, Any], raw_dir: Path, max_rows: int | None, p
                 ts_ms = int(ts_ns // 1_000_000)
                 for band_start, band_end in bands:
                     band_mask = (freq >= band_start) & (freq < band_end)
-                    band_vals_ch1 = ch1[i, band_mask]
-                    band_vals_ch2 = ch2[i, band_mask]
-                    if freq_agg == "mean":
-                        band_power_ch1 = float(np.nanmean(band_vals_ch1))
-                        band_power_ch2 = float(np.nanmean(band_vals_ch2))
+                    if not band_mask.any():
+                        band_power_ch1 = np.nan
+                        band_power_ch2 = np.nan
                     else:
-                        band_power_ch1 = float(np.nanmedian(band_vals_ch1))
-                        band_power_ch2 = float(np.nanmedian(band_vals_ch2))
+                        band_vals_ch1 = ch1[i, band_mask]
+                        band_vals_ch2 = ch2[i, band_mask]
+                        if freq_agg == "mean":
+                            band_power_ch1 = (
+                                float(np.nanmean(band_vals_ch1))
+                                if np.any(~np.isnan(band_vals_ch1))
+                                else np.nan
+                            )
+                            band_power_ch2 = (
+                                float(np.nanmean(band_vals_ch2))
+                                if np.any(~np.isnan(band_vals_ch2))
+                                else np.nan
+                            )
+                        else:
+                            band_power_ch1 = (
+                                float(np.nanmedian(band_vals_ch1))
+                                if np.any(~np.isnan(band_vals_ch1))
+                                else np.nan
+                            )
+                            band_power_ch2 = (
+                                float(np.nanmedian(band_vals_ch2))
+                                if np.any(~np.isnan(band_vals_ch2))
+                                else np.nan
+                            )
                     records.append(
                         {
                             "ts_ms": ts_ms,
