@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from obspy import read
 import pyarrow.dataset as ds
+import pywt
 import zarr
 
 from src.dq.reporting import basic_stats, write_dq_report
@@ -41,20 +42,44 @@ def _resolve_preprocess_batch_rows(config: Dict[str, Any]) -> int:
     return value if value > 0 else 50_000
 
 
-def _resolve_overlap(config: Dict[str, Any]) -> int:
-    interp_cfg = config.get("preprocess", {}).get("interpolate", {})
-    filter_cfg = config.get("preprocess", {}).get("filter", {})
-    interp_limit = int(interp_cfg.get("max_gap_minutes", 10))
-    filter_window = int(filter_cfg.get("window", 5)) if filter_cfg.get("enabled", False) else 0
-    return max(interp_limit, filter_window)
+def _source_preprocess_cfg(config: Dict[str, Any], source: str) -> Dict[str, Any]:
+    return config.get("preprocess", {}).get(source, {}) or {}
+
+
+def _resolve_int(value: Any, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def _resolve_overlap(config: Dict[str, Any], source: str) -> int:
+    source_cfg = _source_preprocess_cfg(config, source)
+    interp_cfg = source_cfg.get("interpolate", config.get("preprocess", {}).get("interpolate", {}))
+    lowpass_cfg = source_cfg.get("lowpass", config.get("preprocess", {}).get("filter", {}))
+    highpass_cfg = source_cfg.get("highpass", {})
+    despike_cfg = source_cfg.get("despike", {})
+    interp_limit = _resolve_int(
+        interp_cfg.get("max_gap_points", interp_cfg.get("max_gap_minutes")), 10
+    )
+    lowpass_window = _resolve_int(
+        lowpass_cfg.get("window_points", lowpass_cfg.get("window")), 0
+    )
+    highpass_window = _resolve_int(highpass_cfg.get("window_points"), 0)
+    despike_window = _resolve_int(despike_cfg.get("window_points"), 0)
+    return max(interp_limit, lowpass_window, highpass_window, despike_window)
 
 
 def _resolve_minute_expansion(config: Dict[str, Any], source: str) -> Dict[str, Any] | None:
-    expand_cfg = config.get("preprocess", {}).get("expand_minute_to_seconds", {})
-    source_cfg = expand_cfg.get(source)
+    preprocess_cfg = config.get("preprocess", {}) or {}
+    source_cfg = preprocess_cfg.get(source, {}).get("expand_minute_to_seconds")
     if not source_cfg:
-        return None
-    if not source_cfg.get("enabled", False):
+        expand_cfg = preprocess_cfg.get("expand_minute_to_seconds", {})
+        source_cfg = expand_cfg.get(source)
+    if not source_cfg:
         return None
     seconds = int(source_cfg.get("seconds", 60))
     seconds = max(seconds, 1)
@@ -98,38 +123,182 @@ def _iter_expand_minute_to_seconds(
         yield repeated
 
 
+def _mad_outlier_mask(
+    values: pd.Series, threshold: float, mean: float | None, std: float | None
+) -> pd.Series:
+    series = values.astype(float)
+    median = float(series.median())
+    mad = float(np.median(np.abs(series - median)))
+    if mad > 0:
+        z = 0.6745 * (series - median) / mad
+        return z.abs() > threshold
+    if std is None or std == 0 or math.isnan(std):
+        return pd.Series([False] * len(series), index=series.index)
+    mean = float(mean) if mean is not None else float(series.mean())
+    z = (series - mean) / float(std)
+    return z.abs() > threshold
+
+
+def _hampel_mask(values: pd.Series, window: int, threshold: float) -> pd.Series:
+    if window <= 1:
+        return pd.Series([False] * len(values), index=values.index)
+    series = values.astype(float)
+    rolling_median = series.rolling(window, center=True, min_periods=1).median()
+    deviation = (series - rolling_median).abs()
+    rolling_mad = deviation.rolling(window, center=True, min_periods=1).median()
+    scaled = 0.6745 * deviation / rolling_mad.replace(0, np.nan)
+    return scaled > threshold
+
+
+def _detrend_linear(values: pd.Series, ts_ms: pd.Series) -> pd.Series:
+    mask = values.notna()
+    if mask.sum() < 2:
+        return values
+    x = ts_ms[mask].to_numpy(dtype=float)
+    x = x - x[0]
+    y = values[mask].to_numpy(dtype=float)
+    coeff = np.polyfit(x, y, 1)
+    trend = coeff[0] * (ts_ms.to_numpy(dtype=float) - x[0]) + coeff[1]
+    return values - trend
+
+
+def _highpass_rolling(values: pd.Series, window: int, method: str) -> pd.Series:
+    if window <= 1:
+        return values
+    series = values.astype(float)
+    if method == "rolling_mean":
+        baseline = series.rolling(window, center=True, min_periods=1).mean()
+    else:
+        baseline = series.rolling(window, center=True, min_periods=1).median()
+    return series - baseline
+
+
+def _wavelet_denoise(values: pd.Series, cfg: Dict[str, Any]) -> pd.Series:
+    series = values.astype(float)
+    if series.dropna().shape[0] < 8:
+        return series
+    wavelet = str(cfg.get("name", "db4"))
+    mode = str(cfg.get("mode", "soft"))
+    threshold_scale = float(cfg.get("threshold_scale", 1.0))
+    max_level = int(
+        cfg.get(
+            "level",
+            pywt.dwt_max_level(series.dropna().shape[0], pywt.Wavelet(wavelet).dec_len),
+        )
+    )
+    max_level = max(max_level, 1)
+    mask = series.isna()
+    filled = series.copy()
+    filled = filled.interpolate(limit_direction="both")
+    filled = filled.fillna(method="bfill").fillna(method="ffill")
+    coeffs = pywt.wavedec(filled.to_numpy(), wavelet, mode="periodization", level=max_level)
+    detail = coeffs[-1]
+    sigma = float(np.median(np.abs(detail)) / 0.6745) if detail.size else 0.0
+    if sigma > 0:
+        uthresh = threshold_scale * sigma * math.sqrt(2 * math.log(len(filled)))
+        coeffs[1:] = [pywt.threshold(c, value=uthresh, mode=mode) for c in coeffs[1:]]
+    reconstructed = pywt.waverec(coeffs, wavelet, mode="periodization")[: len(filled)]
+    output = pd.Series(reconstructed, index=series.index)
+    output[mask] = np.nan
+    return output
+
+
+def _apply_geomag_aef_preprocess(
+    values: pd.Series, ts_ms: pd.Series, source_cfg: Dict[str, Any]
+) -> tuple[pd.Series, Dict[str, Any]]:
+    preprocess_meta: Dict[str, Any] = {}
+    detrend_cfg = source_cfg.get("detrend", {})
+    detrend_method = str(detrend_cfg.get("method", "linear")).lower()
+    if detrend_method in {"linear", "constant"}:
+        if detrend_method == "linear":
+            values = _detrend_linear(values, ts_ms)
+        else:
+            values = values - values.mean()
+        preprocess_meta["detrend"] = {"method": detrend_method}
+    highpass_cfg = source_cfg.get("highpass", {})
+    highpass_window = _resolve_int(highpass_cfg.get("window_points"), 0)
+    if highpass_window > 1:
+        values = _highpass_rolling(
+            values, highpass_window, str(highpass_cfg.get("method", "rolling_median"))
+        )
+        preprocess_meta["highpass"] = {
+            "window_points": highpass_window,
+            "method": highpass_cfg.get("method", "rolling_median"),
+        }
+    wavelet_cfg = source_cfg.get("wavelet", {})
+    if wavelet_cfg:
+        values = _wavelet_denoise(values, wavelet_cfg)
+        preprocess_meta["wavelet"] = {
+            "name": wavelet_cfg.get("name", "db4"),
+            "level": wavelet_cfg.get("level"),
+            "threshold_scale": wavelet_cfg.get("threshold_scale", 1.0),
+            "mode": wavelet_cfg.get("mode", "soft"),
+        }
+    return values, preprocess_meta
+
+
 def _clean_timeseries_group(
-    df: pd.DataFrame, config: Dict[str, Any], mean: float | None, std: float | None
+    df: pd.DataFrame,
+    config: Dict[str, Any],
+    source: str,
+    mean: float | None,
+    std: float | None,
 ) -> Tuple[pd.DataFrame, np.ndarray]:
     if df.empty:
         return df, np.array([])
 
     df = df.copy()
     df["quality_flags"] = _parse_flags(df["quality_flags"])
-    outlier_cfg = config.get("preprocess", {}).get("outlier", {})
-    threshold = float(outlier_cfg.get("threshold", 4.0))
+    source_cfg = _source_preprocess_cfg(config, source)
+    preprocess_meta: Dict[str, Any] = {}
 
-    values = df["value"].astype(float)
-    mean = float(mean) if mean is not None else float(values.mean())
-    std = float(std) if std is not None else float(values.std() or 1.0)
-    std = std if std != 0 else 1.0
-    z = (values - mean) / std
-    outlier_mask = z.abs() > threshold
+    values = pd.to_numeric(df["value"], errors="coerce")
+    if source in {"geomag", "aef"}:
+        values, preprocess_meta = _apply_geomag_aef_preprocess(values, df["ts_ms"], source_cfg)
+    df["value"] = values
+
+    if source == "aef":
+        despike_cfg = source_cfg.get("despike", {})
+        despike_window = _resolve_int(despike_cfg.get("window_points"), 0)
+        despike_threshold = float(despike_cfg.get("zscore_mad_threshold", 6.0))
+        if despike_window > 1:
+            despike_mask = _hampel_mask(df["value"], despike_window, despike_threshold)
+            for idx in df.index[despike_mask]:
+                flags = df.at[idx, "quality_flags"]
+                flags["is_outlier"] = True
+                flags["outlier_method"] = "hampel"
+                flags["threshold"] = despike_threshold
+                df.at[idx, "quality_flags"] = flags
+            df.loc[despike_mask, "value"] = np.nan
+            preprocess_meta["despike"] = {
+                "window_points": despike_window,
+                "threshold": despike_threshold,
+            }
+
+    outlier_cfg = source_cfg.get("outlier", config.get("preprocess", {}).get("outlier", {}))
+    threshold = float(outlier_cfg.get("threshold", 6.0))
+    outlier_mask = _mad_outlier_mask(df["value"], threshold, mean, std)
     for idx in df.index[outlier_mask]:
         flags = df.at[idx, "quality_flags"]
         flags["is_outlier"] = True
-        flags["outlier_method"] = "zscore"
+        flags["outlier_method"] = "mad"
         flags["threshold"] = threshold
         df.at[idx, "quality_flags"] = flags
     df.loc[outlier_mask, "value"] = np.nan
+    preprocess_meta["outlier"] = {"method": "mad", "threshold": threshold}
 
-    interp_cfg = config.get("preprocess", {}).get("interpolate", {})
-    df["value"] = df["value"].interpolate(
-        limit=int(interp_cfg.get("max_gap_minutes", 10)),
-        limit_direction="both",
+    interp_cfg = source_cfg.get("interpolate", config.get("preprocess", {}).get("interpolate", {}))
+    interp_limit = _resolve_int(
+        interp_cfg.get("max_gap_points", interp_cfg.get("max_gap_minutes")), 10
     )
+    df["value"] = df["value"].interpolate(limit=interp_limit, limit_direction="both")
+    preprocess_meta["interpolate"] = {
+        "max_gap_points": interp_limit,
+        "method": interp_cfg.get("method", "linear"),
+    }
     for idx, val in df["value"].items():
         flags = df.at[idx, "quality_flags"]
+        flags["preprocess"] = preprocess_meta
         if math.isnan(val):
             flags["is_missing"] = True
             flags["missing_reason"] = flags.get("missing_reason") or "gap"
@@ -141,15 +310,19 @@ def _clean_timeseries_group(
 
     before_values = df["value"].astype(float).to_numpy(copy=True)
 
-    filter_cfg = config.get("preprocess", {}).get("filter", {})
-    if filter_cfg.get("enabled", False):
-        window = int(filter_cfg.get("window", 5))
-        df["value"] = df["value"].rolling(window=window, min_periods=1).mean()
+    lowpass_cfg = source_cfg.get("lowpass", config.get("preprocess", {}).get("filter", {}))
+    lowpass_window = _resolve_int(
+        lowpass_cfg.get("window_points", lowpass_cfg.get("window")), 0
+    )
+    if lowpass_window > 1:
+        df["value"] = df["value"].rolling(window=lowpass_window, min_periods=1).mean()
+        preprocess_meta["lowpass"] = {"window_points": lowpass_window}
         for idx in df.index:
             flags = df.at[idx, "quality_flags"]
             flags["is_filtered"] = True
-            flags["filter_type"] = filter_cfg.get("method", "rolling_mean")
-            flags["filter_params"] = {"window": window}
+            flags["filter_type"] = "rolling_mean"
+            flags["filter_params"] = {"window": lowpass_window}
+            flags["preprocess"] = preprocess_meta
             df.at[idx, "quality_flags"] = flags
 
     return df, before_values
@@ -209,6 +382,81 @@ def _compute_group_stats(
     return stats, total
 
 
+def _apply_seismic_preprocess(trace, config: Dict[str, Any]) -> tuple[object, Dict[str, Any]]:
+    cfg = config.get("preprocess", {}).get("seismic_bandpass", {}) or {}
+    meta: Dict[str, Any] = {"detrend": ["demean", "linear"]}
+    trace = trace.copy()
+    try:
+        trace.detrend("demean")
+        trace.detrend("linear")
+    except Exception:
+        meta["detrend_error"] = "failed"
+
+    taper_pct = float(cfg.get("taper_max_percentage", 0.05))
+    if taper_pct > 0:
+        try:
+            trace.taper(max_percentage=taper_pct, type="cosine")
+        except Exception:
+            meta["taper_error"] = "failed"
+
+    sr = float(trace.stats.sampling_rate or 0.0)
+    freqmin = float(cfg.get("freqmin_hz", 0.5))
+    freqmax_user = float(cfg.get("freqmax_user_hz", 20.0))
+    nyquist_ratio = float(cfg.get("freqmax_nyquist_ratio", 0.45))
+    freqmax = min(freqmax_user, nyquist_ratio * sr) if sr > 0 else freqmax_user
+    meta["bandpass"] = {
+        "freqmin_hz": freqmin,
+        "freqmax_used_hz": freqmax,
+        "freqmax_user_hz": freqmax_user,
+        "nyquist_ratio": nyquist_ratio,
+        "corners": int(cfg.get("corners", 4)),
+        "zerophase": bool(cfg.get("zerophase", True)),
+    }
+    if freqmax > freqmin and sr > 0:
+        try:
+            trace.filter(
+                "bandpass",
+                freqmin=freqmin,
+                freqmax=freqmax,
+                corners=int(cfg.get("corners", 4)),
+                zerophase=bool(cfg.get("zerophase", True)),
+            )
+            meta["bandpass_skipped"] = False
+        except Exception:
+            meta["bandpass_error"] = "failed"
+    else:
+        meta["bandpass_skipped"] = True
+
+    notch_cfg = cfg.get("notch", {}) or {}
+    base_list = notch_cfg.get("base_hz", [50, 60])
+    half_width = float(notch_cfg.get("half_width_hz", 0.5))
+    harmonics = int(notch_cfg.get("harmonics", 0))
+    meta["notch"] = {
+        "base_hz": base_list,
+        "half_width_hz": half_width,
+        "harmonics": harmonics,
+    }
+    if sr > 0 and harmonics > 0 and half_width > 0:
+        nyquist = sr / 2.0
+        for base in base_list:
+            for harmonic in range(1, harmonics + 1):
+                center = float(base) * harmonic
+                if center + half_width >= nyquist or center - half_width <= 0:
+                    continue
+                try:
+                    trace.filter(
+                        "bandstop",
+                        freqmin=center - half_width,
+                        freqmax=center + half_width,
+                        corners=2,
+                        zerophase=True,
+                    )
+                except Exception:
+                    meta["notch_error"] = "failed"
+                    break
+    return trace, meta
+
+
 def _seismic_features(
     config: Dict[str, Any],
     output_paths,
@@ -236,26 +484,33 @@ def _seismic_features(
             seen_files.add(mseed_file)
             stream = read(str(mseed_file))
             for trace in stream:
-                data = trace.data.astype(float)
-                sr = float(trace.stats.sampling_rate)
+                processed, preprocess_meta = _apply_seismic_preprocess(trace, config)
+                data = processed.data.astype(float)
+                sr = float(processed.stats.sampling_rate)
                 window = int(sr * interval_sec)
-                start_time = trace.stats.starttime.datetime
+                start_time = processed.stats.starttime.datetime
+                quality_flags = {
+                    "is_filtered": True,
+                    "filter_type": "seismic_preprocess",
+                    "filter_params": preprocess_meta,
+                }
                 for idx in range(0, len(data), window):
                     segment = data[idx : idx + window]
                     if len(segment) < window:
                         break
                     ts = pd.Timestamp(start_time, tz="UTC") + pd.Timedelta(seconds=idx / sr)
                     station_id = (
-                        f"{trace.stats.network}.{trace.stats.station}.{trace.stats.location or ''}."
-                        f"{trace.stats.channel}"
+                        f"{processed.stats.network}.{processed.stats.station}."
+                        f"{processed.stats.location or ''}.{processed.stats.channel}"
                     )
                     records.append(
                         {
                             "ts_ms": int(ts.value // 1_000_000),
                             "source": "seismic",
                             "station_id": station_id,
-                            "channel": f"{trace.stats.channel}_rms",
+                            "channel": f"{processed.stats.channel}_rms",
                             "value": float(np.sqrt(np.mean(segment**2))),
+                            "quality_flags": quality_flags,
                         }
                     )
                     records.append(
@@ -263,8 +518,9 @@ def _seismic_features(
                             "ts_ms": int(ts.value // 1_000_000),
                             "source": "seismic",
                             "station_id": station_id,
-                            "channel": f"{trace.stats.channel}_mean_abs",
+                            "channel": f"{processed.stats.channel}_mean_abs",
                             "value": float(np.mean(np.abs(segment))),
+                            "quality_flags": quality_flags,
                         }
                     )
                     if max_rows and len(records) >= max_rows:
@@ -280,7 +536,12 @@ def _seismic_features(
         return pd.DataFrame()
 
     df = pd.DataFrame.from_records(records)
-    df["quality_flags"] = [{} for _ in range(len(df))]
+    if "quality_flags" not in df.columns:
+        df["quality_flags"] = [{} for _ in range(len(df))]
+    else:
+        df["quality_flags"] = df["quality_flags"].apply(
+            lambda item: item if isinstance(item, dict) else {}
+        )
     df["proc_stage"] = "standard"
     df["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
     df["params_hash"] = params_hash
@@ -296,7 +557,31 @@ def _seismic_features(
 
 
 def _vlf_features(config: Dict[str, Any], raw_dir: Path, max_rows: int | None, params_hash: str) -> pd.DataFrame:
-    band_edges = config.get("vlf", {}).get("band_edges_hz", [10, 1000, 3000, 10000])
+    preprocess_cfg = config.get("preprocess", {}).get("vlf_preprocess", {}) or {}
+    standard_cfg = preprocess_cfg.get("standardize", {}) or {}
+    band_edges = standard_cfg.get("bands_hz") or config.get("vlf", {}).get(
+        "band_edges_hz", [10, 1000, 3000, 10000]
+    )
+
+    def _normalize_bands(edges: Any) -> List[Tuple[float, float]]:
+        if not edges:
+            return []
+        if all(isinstance(item, (list, tuple)) and len(item) == 2 for item in edges):
+            return [(float(item[0]), float(item[1])) for item in edges]
+        pairs = []
+        for start, end in zip(edges[:-1], edges[1:]):
+            pairs.append((float(start), float(end)))
+        return pairs
+
+    bands = _normalize_bands(band_edges)
+    freq_agg = str(standard_cfg.get("freq_agg", "median")).lower()
+    time_agg = str(standard_cfg.get("time_agg", "median")).lower()
+    target_interval = str(standard_cfg.get("target_interval", "1min"))
+    interval_ms = int(pd.Timedelta(target_interval).total_seconds() * 1000)
+    time_median_window = _resolve_int(preprocess_cfg.get("time_median_window"), 1)
+    line_mask_cfg = preprocess_cfg.get("freq_line_mask", {}) or {}
+    bg_cfg = preprocess_cfg.get("background_subtract", {}) or {}
+
     records: List[Dict[str, Any]] = []
 
     for station_dir in (raw_dir / "vlf").glob("*"):
@@ -310,12 +595,33 @@ def _vlf_features(config: Dict[str, Any], raw_dir: Path, max_rows: int | None, p
             ch1 = root["ch1"][:]
             ch2 = root["ch2"][:]
 
+            mask = np.zeros_like(freq, dtype=bool)
+            base_list = line_mask_cfg.get("base_hz", [50, 60])
+            harmonics = int(line_mask_cfg.get("harmonics", 5))
+            half_width = float(line_mask_cfg.get("half_width_hz", 0.5))
+            if harmonics > 0 and half_width > 0:
+                for base in base_list:
+                    for harmonic in range(1, harmonics + 1):
+                        center = float(base) * harmonic
+                        mask |= (freq >= center - half_width) & (freq <= center + half_width)
+            if mask.any():
+                ch1 = ch1.copy()
+                ch2 = ch2.copy()
+                ch1[:, mask] = np.nan
+                ch2[:, mask] = np.nan
+
             for i, ts_ns in enumerate(epoch_ns):
                 ts_ms = int(ts_ns // 1_000_000)
-                for band_start, band_end in zip(band_edges[:-1], band_edges[1:]):
-                    mask = (freq >= band_start) & (freq < band_end)
-                    band_power_ch1 = float(np.nanmean(ch1[i, mask]))
-                    band_power_ch2 = float(np.nanmean(ch2[i, mask]))
+                for band_start, band_end in bands:
+                    band_mask = (freq >= band_start) & (freq < band_end)
+                    band_vals_ch1 = ch1[i, band_mask]
+                    band_vals_ch2 = ch2[i, band_mask]
+                    if freq_agg == "mean":
+                        band_power_ch1 = float(np.nanmean(band_vals_ch1))
+                        band_power_ch2 = float(np.nanmean(band_vals_ch2))
+                    else:
+                        band_power_ch1 = float(np.nanmedian(band_vals_ch1))
+                        band_power_ch2 = float(np.nanmedian(band_vals_ch2))
                     records.append(
                         {
                             "ts_ms": ts_ms,
@@ -365,7 +671,51 @@ def _vlf_features(config: Dict[str, Any], raw_dir: Path, max_rows: int | None, p
         return pd.DataFrame()
 
     df = pd.DataFrame.from_records(records)
-    df["quality_flags"] = [{} for _ in range(len(df))]
+    if interval_ms > 0:
+        df["ts_ms"] = (df["ts_ms"] // interval_ms) * interval_ms
+        agg_func = np.nanmean if time_agg == "mean" else np.nanmedian
+        df = (
+            df.groupby(["ts_ms", "source", "station_id", "channel"], as_index=False)["value"]
+            .agg(agg_func)
+        )
+
+    if time_median_window > 1 and not df.empty:
+        df = df.sort_values("ts_ms")
+        df["value"] = df.groupby(["station_id", "channel"], sort=False)["value"].transform(
+            lambda series: series.rolling(
+                time_median_window, center=True, min_periods=1
+            ).median()
+        )
+
+    if bg_cfg:
+        method = str(bg_cfg.get("method", "median")).lower()
+        if method in {"median", "mean"}:
+            baseline = (
+                df.groupby(["station_id", "channel"])["value"].median()
+                if method == "median"
+                else df.groupby(["station_id", "channel"])["value"].mean()
+            )
+            df["value"] = df.apply(
+                lambda row: row["value"]
+                - baseline.get((row["station_id"], row["channel"]), 0.0),
+                axis=1,
+            )
+            df["value"] = df["value"].clip(lower=0.0)
+
+    preprocess_meta = {
+        "freq_line_mask": {
+            "base_hz": base_list,
+            "harmonics": harmonics,
+            "half_width_hz": half_width,
+        },
+        "freq_agg": freq_agg,
+        "time_agg": time_agg,
+        "target_interval": target_interval,
+        "time_median_window": time_median_window,
+        "background_subtract": bg_cfg or {},
+    }
+
+    df["quality_flags"] = [preprocess_meta for _ in range(len(df))]
     df["proc_stage"] = "standard"
     df["proc_version"] = config.get("pipeline", {}).get("version", "0.0.0")
     df["params_hash"] = params_hash
@@ -385,7 +735,7 @@ def _process_standard_source(
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     dataset = ds.dataset(raw_path, format="parquet", partitioning="hive")
     batch_rows = _resolve_preprocess_batch_rows(config)
-    overlap = _resolve_overlap(config)
+    overlap = _resolve_overlap(config, source)
     expand_cfg = _resolve_minute_expansion(config, source)
     if overlap >= batch_rows:
         batch_rows = max(overlap + 1, batch_rows)
@@ -463,7 +813,9 @@ def _process_standard_source(
                     combined_raw = group
                 combined_raw = combined_raw.sort_values("ts_ms")
                 mean, std = mean_std.get(key, (None, None))
-                cleaned, before_values = _clean_timeseries_group(combined_raw, config, mean, std)
+                cleaned, before_values = _clean_timeseries_group(
+                    combined_raw, config, source, mean, std
+                )
                 if overlap > 0 and len(cleaned) > overlap:
                     to_write = cleaned.iloc[:-overlap].copy()
                     before_values = before_values[:-overlap]
@@ -538,7 +890,9 @@ def _process_standard_source(
             if tail_raw.empty:
                 continue
             mean, std = mean_std.get(key, (None, None))
-            cleaned, before_values = _clean_timeseries_group(tail_raw, config, mean, std)
+            cleaned, before_values = _clean_timeseries_group(
+                tail_raw, config, source, mean, std
+            )
             if cleaned.empty:
                 continue
             cleaned = cleaned.copy()

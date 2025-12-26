@@ -59,23 +59,72 @@ seismic:
   feature_interval_sec: 60
 
 preprocess:
-  outlier:
-    method: "zscore"
-    threshold: 4.0
-  interpolate:
-    max_gap_minutes: 10
-    method: "linear"
-  filter:
-    enabled: true
-    method: "rolling_mean"
-    window: 5
   batch_rows: 30000
-  expand_minute_to_seconds:
-    aef:
-      enabled: true
+  geomag:
+    detrend:
+      method: "linear"
+    highpass:
+      window_points: 600
+      method: "rolling_median"
+    wavelet:
+      name: "db4"
+      mode: "soft"
+      threshold_scale: 1.0
+    outlier:
+      threshold: 6.0
+    interpolate:
+      max_gap_points: 10
+      method: "linear"
+    lowpass:
+      window_points: 5
+  aef:
+    detrend:
+      method: "linear"
+    highpass:
+      window_points: 300
+      method: "rolling_median"
+    wavelet:
+      name: "db4"
+      mode: "soft"
+      threshold_scale: 1.0
+    despike:
+      window_points: 5
+      zscore_mad_threshold: 6.0
+    outlier:
+      threshold: 6.0
+    interpolate:
+      max_gap_points: 5
+      method: "linear"
+    lowpass:
+      window_points: 5
+    expand_minute_to_seconds:
       seconds: 60
       mode: "centered"
       chunk_rows: 2000
+  seismic_bandpass:
+    freqmin_hz: 0.5
+    freqmax_user_hz: 20.0
+    freqmax_nyquist_ratio: 0.45
+    taper_max_percentage: 0.05
+    corners: 4
+    zerophase: true
+    notch:
+      base_hz: [50, 60]
+      half_width_hz: 0.5
+      harmonics: 0
+  vlf_preprocess:
+    freq_line_mask:
+      base_hz: [50, 60]
+      harmonics: 5
+      half_width_hz: 0.5
+    time_median_window: 3
+    standardize:
+      bands_hz: [10, 1000, 3000, 10000]
+      freq_agg: "median"
+      time_agg: "median"
+      target_interval: "1min"
+    background_subtract:
+      method: "median"
 
 link:
   spatial_km: 1000
@@ -84,6 +133,15 @@ link:
 features:
   rolling_window_minutes: 30
   topn_anomalies: 50
+  association:
+    change_threshold: 3.0
+    min_sources: 2
+    corr_threshold: 0.6
+    max_lag_minutes: 30
+    lag_step_minutes: 1
+    min_overlap: 30
+    min_points: 20
+    topn_pairs: 50
 
 vlf:
   band_edges_hz: [10, 1000, 3000, 10000]

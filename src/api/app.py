@@ -742,6 +742,29 @@ def get_anomaly(event_id: str):
     return _safe_records(df)
 
 
+@app.get("/events/{event_id}/association")
+def get_association(event_id: str, limit: int = 200):
+    summary_path = OUTPUT_ROOT / "features" / event_id / "association.json"
+    if not summary_path.exists():
+        raise HTTPException(status_code=404, detail="association.json not found")
+    summary = _load_json(summary_path)
+    changes = []
+    similarity = []
+    changes_path = OUTPUT_ROOT / "features" / event_id / "association_changes.parquet"
+    if changes_path.exists():
+        df = pd.read_parquet(changes_path)
+        if limit:
+            df = df.head(limit)
+        changes = _safe_records(df)
+    similarity_path = OUTPUT_ROOT / "features" / event_id / "association_similarity.parquet"
+    if similarity_path.exists():
+        df = pd.read_parquet(similarity_path)
+        if limit:
+            df = df.head(limit)
+        similarity = _safe_records(df)
+    return {"summary": summary, "changes": changes, "similarity": similarity}
+
+
 @app.get("/events/{event_id}/plots")
 def get_plot(event_id: str, kind: str):
     path = OUTPUT_ROOT / "plots" / "spec" / event_id / f"plot_{kind}.json"

@@ -11,6 +11,7 @@ uvicorn
 jinja2
 plotly
 matplotlib
+pywavelets
 httpx
 tables
 pytest

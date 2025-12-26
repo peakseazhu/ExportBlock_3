@@ -47,9 +47,9 @@ Key sections:
 - `paths`: data locations and file patterns
 - `events`: event list with `event_id`, `origin_time_utc`, `lat`, `lon`
 - `time`: alignment window and interval
-- `preprocess`: outlier, interpolation, filter
+- `preprocess`: per-source cleaning params (geomag/aef wavelet+detrend, seismic bandpass, VLF preprocess)
 - `link`: spatial radius
-- `features`: anomaly thresholds
+- `features`: anomaly thresholds + association params
 
 ## Pipeline Stages
 
@@ -63,7 +63,7 @@ Stage meanings (short):
 - manifest: scan files and record manifest metadata.
 - ingest: parse raw files into structured tables (no event filtering).
 - raw: build raw index for original files to support `/raw/query`.
-- standard: denoise/interpolate/filter and persist cleaned data.
+- standard: per-source cleaning + standardized series (geomag/aef cleaned series, seismic rms/mean_abs, VLF band power/peak).
 - spatial: build station index and spatial DQ.
 - link: event window + spatial join into linked dataset.
 - features: extract stats + signal features (including geomag gradients, VLF peaks, seismic arrival proxies).
@@ -90,6 +90,7 @@ storage:
   parquet:
     batch_rows: 30000
 ```
+Full cleaning parameters live under `preprocess.<source>` / `preprocess.seismic_bandpass` / `preprocess.vlf_preprocess`.
 Finalize and bundle:
 
 ```bash
@@ -118,6 +119,9 @@ outputs/raw/vlf/                               # VLF Zarr cubes (raw spectrogram
 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
 outputs/linked/<event_id>/aligned.parquet
 outputs/features/<event_id>/features.parquet
+outputs/features/<event_id>/association_changes.parquet
+outputs/features/<event_id>/association_similarity.parquet
+outputs/features/<event_id>/association.json
 outputs/features/<event_id>/anomaly.parquet
 outputs/plots/html/<event_id>/plot_*.html
 outputs/events/<event_id>/reports/event_summary.md
@@ -145,6 +149,7 @@ uvicorn src.api.app:app --reload --host 127.0.0.1 --port 8000
   GET /events/<event_id>/linked
   GET /events/<event_id>/features
   GET /events/<event_id>/anomaly
+  GET /events/<event_id>/association
   GET /events/<event_id>/plots?kind=aligned_timeseries
   GET /events/<event_id>/export?format=csv&include_raw=true
   GET /events/<event_id>/seismic/export?format=csv
@@ -170,3 +175,104 @@ pytest
 
 - VLF Raw data is stored as Zarr; compression is disabled for compatibility with Zarr v3.
 - `outputs/` is generated at runtime and should not be committed.
+```自测示例
+RAW:
+//KAK、KNY、MMB
+http://127.0.0.1:8000/raw/query?source=geomag&start=2020-09-11&end=2020-09-12&station_id=KAK&limit=5000
+
+http://127.0.0.1:8000/raw/query?source=aef&start=2020-09-11&end=2020-09-12&station_id=KAK&limit=100
+
+//II.ERM.00.BHZ、JP.JKA..BHZ、JP.JMM..BHZ、JP.JSD..BHZ、JP.JTM..BHZ JP.JYT..BHZ
+http://127.0.0.1:8000/raw/query?source=seismic&start=2020-09-11&end=2020-09-12&station_id=II.ERM.00.BHZ&limit=100
+
+http://127.0.0.1:8000/raw/query?source=vlf&start=2020-09-11&end=2020-09-12&station_id=MOS&limit=100
+
+2020-09-10T00:00:00Z
+http://127.0.0.1:8000/raw/vlf/slice?station_id=MOS&start=2020-09-10T00%3A00%3A00Z&end=2020-09-10T01%3A00%3A00Z&max_time=200&max_freq=128&max_files=1
+
+STANDARD:
+//KAK、KNY、MMB
+http://127.0.0.1:8000/standard/query?source=geomag&start=2020-09-11&end=2020-09-12&limit=5000
+
+http://127.0.0.1:8000/standard/query?source=aef&start=2020-09-11&end=2020-09-12&station_id=KAK&limit=5000
+
+//II.ERM.00.BHZ、JP.JKA..BHZ、JP.JMM..BHZ、JP.JSD..BHZ、JP.JTM..BHZ JP.JYT..BHZ
+http://127.0.0.1:8000/standard/query?source=seismic&start=2020-09-11&end=2020-09-12&station_id=II.ERM.00.BHZ&limit=1000
+
+http://127.0.0.1:8000/standard/query?source=vlf&start=2020-09-11&end=2020-09-12&station_id=MOS&limit=1000
+
+RAW_SUMMARY:
+http://127.0.0.1:8000/raw/summary?source=geomag
+http://127.0.0.1:8000/raw/summary?source=aef
+http://127.0.0.1:8000/raw/summary?source=seismic
+http://127.0.0.1:8000/raw/summary?source=vlf
+STANDARD_SUMMARY:
+http://127.0.0.1:8000/standard/summary?source=geomag
+http://127.0.0.1:8000/standard/summary?source=aef
+http://127.0.0.1:8000/standard/summary?source=seismic
+http://127.0.0.1:8000/standard/summary?source=vlf
+
+LINKED:
+http://127.0.0.1:8000/events/eq_20200912_024411/linked?limit=5000
+
+FEATURES:
+http://127.0.0.1:8000/events/eq_20200912_024411/features
+
+ANOMALY:返回未空即[]，不知道为什么
+http://127.0.0.1:8000/events/eq_20200912_024411/anomaly
+
+ASSOCIATION:
+http://127.0.0.1:8000/events/eq_20200912_024411/association?limit=200
+
+EXPORT_EVENT_SEISMIC:  csv hdf5 json   2020-09-12T00:00:00ZS
+http://127.0.0.1:8000/events/eq_20200912_024411/seismic/export?format=csv&start=2020-09-12T01%3A00%3A00Z&end=2020-09-12T02%3A00%3A00Z&limit=20000
+
+EXPORT_EVENT_VLF:  csv hdf5 json   2020-09-12T01:00:00Z
+
+EXPORT_EVENT:  2020-09-12T01:00:00Z  csv json
+http://127.0.0.1:8000/events/eq_20200912_024411/export?format=csv&start=2020-09-12T01%3A00%3A00Z&end=2020-09-12T02%3A00%3A00Z&include_raw=false&raw_limit=20000&raw_seismic_format=csv&raw_vlf_format=json&raw_vlf_station_id=MOS&raw_vlf_max_time=200&raw_vlf_max_freq=128&raw_vlf_max_files=1
+
+UI
+http://127.0.0.1:8000/ui
+
+```
+
+```
+RAW:
+curl -X 'GET' \
+  'http://127.0.0.1:8000/raw/query?source=geomag&start=2020-09-11&end=2020-09-12&station_id=KAK&limit=5000' \
+  -H 'accept: application/json'
+
+curl -X 'GET' \
+  'http://127.0.0.1:8000/raw/query?source=aef&start=2020-09-11&end=2020-09-12&station_id=KAK&limit=100' \
+  -H 'accept: application/json'
+
+curl -X 'GET' \
+  'http://127.0.0.1:8000/raw/query?source=seismic&start=2020-09-11&end=2020-09-12&station_id=II.ERM.00.BHZ&limit=100' \
+  -H 'accept: application/json'
+
+curl -X 'GET' \
+  'http://127.0.0.1:8000/raw/query?source=vlf&start=2020-09-11&end=2020-09-12&station_id=MOS&limit=100' \
+  -H 'accept: application/json'
+
+curl -X 'GET' \
+  'http://127.0.0.1:8000/raw/vlf/slice?station_id=MOS&start=2020-09-10T00%3A00%3A00Z&end=2020-09-10T01%3A00%3A00Z&max_time=200&max_freq=128&max_files=1' \
+  -H 'accept: application/json'
+
+
+STANDARD:
+curl -X 'GET' \
+  'http://127.0.0.1:8000/standard/query?source=geomag&start=2020-09-11&end=2020-09-12&limit=5000' \
+  -H 'accept: application/json'
+
+curl -X 'GET' \
+  'http://127.0.0.1:8000/standard/query?source=aef&start=2020-09-11&end=2020-09-12&station_id=KAK&limit=5000' \
+  -H 'accept: application/json'
+
+curl -X 'GET' \
+  'http://127.0.0.1:8000/standard/query?source=seismic&start=2020-09-11&end=2020-09-12&station_id=II.ERM.00.BHZ&limit=1000' \
+  -H 'accept: application/json'
+curl -X 'GET' \
+  'http://127.0.0.1:8000/standard/query?source=vlf&start=2020-09-11&end=2020-09-12&station_id=MOS&limit=1000' \
+  -H 'accept: application/json'
+```

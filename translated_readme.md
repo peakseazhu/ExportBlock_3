@@ -46,7 +46,7 @@ pip install -r requirements.txt
 - `paths`：数据位置和文件模式
 - `events`：包含 `event_id`、`origin_time_utc`、`lat`、`lon` 的事件列表
 - `time`：对齐窗口和间隔
-- `preprocess`：异常值、插值、滤波
+- `preprocess`：按数据源清洗参数（geomag/aef 小波+去趋势，seismic 带通，VLF 频谱预处理）
 - `link`：空间半径
 - `features`：异常阈值
 
@@ -68,16 +68,16 @@ python scripts/pipeline_run.py   --stages manifest,ingest,raw,standard,spatial,l
 manifest：扫描数据文件并生成清单（审计/可追溯），写入 outputs/manifests。
 ingest：解析原始数据为结构化表；IAGA/AEF/地震索引写入 outputs/ingest，地震波形缓存到 outputs/ingest/seismic_files，VLF 频谱写入 outputs/raw/vlf。
 raw：生成原始文件索引，写入 outputs/raw/index/source=<source>/station_id=<id>/part-*.parquet，用于 raw 查询。
-standard：清洗/插值/滤波并生成标准化表，按相同分区写入 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet。
+standard：按数据源清洗后生成标准化序列（geomag/aef 清洗序列、seismic RMS/mean_abs、VLF 频带功率/峰值），写入 outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet。
 spatial：生成站点空间索引与报告，写入 outputs/reports/spatial_index。
 link：按事件窗口与空间半径对齐/筛选，写入 outputs/linked/<event_id>。
 features：统计特征（mean/std/min/max/rms 等），写入 outputs/features/<event_id>。
-model：异常检测与规则输出，写入 anomaly.parquet 和 outputs/models。
+model??????????????????????????????????????? anomaly.parquet + association_*.parquet/association.json ??? outputs/models???
 plots：生成图表 JSON/HTML，写入 outputs/plots/spec|html/<event_id>。
 
 事件关联数据集：link 阶段写入 aligned.parquet（API：/events/{id}/linked）。
 特征值：features 阶段写入 features.parquet（API：/events/{id}/features）。
-异常/关联模型输出：model 阶段写入 anomaly.parquet（API：/events/{id}/anomaly）。
+??????/?????????????????????model ???????????? anomaly.parquet + association_*.parquet???API???events/{id}/anomaly, /events/{id}/association??????
 finalize_event_package 会把上述内容（link、features、model）汇总到 outputs/events/<event_id>/。
 参考：features.py (line 70) link.py (line 29)
 make_event_bundle.py在 finalize 后打包事件为 zip 用于归档/交付。
@@ -105,6 +105,9 @@ outputs/standard/source=<source>/station_id=<id>/date=YYYY-MM-DD/part-*.parquet
 outputs/linked/<event_id>/aligned.parquet
 outputs/features/<event_id>/features.parquet
 outputs/features/<event_id>/anomaly.parquet
+outputs/features/<event_id>/association_changes.parquet
+outputs/features/<event_id>/association_similarity.parquet
+outputs/features/<event_id>/association.json
 outputs/plots/html/<event_id>/plot_*.html
 outputs/events/<event_id>/reports/event_summary.md
 outputs/events/<event_id>/event_bundle.zip
@@ -131,6 +134,7 @@ GET /events
 GET /events/<event_id>/linked
 GET /events/<event_id>/features
 GET /events/<event_id>/anomaly
+GET /events/<event_id>/association
 GET /events/<event_id>/plots?kind=aligned_timeseries
 GET /events/<event_id>/export?format=csv&include_raw=true
 GET /events/<event_id>/seismic/export?format=csv
