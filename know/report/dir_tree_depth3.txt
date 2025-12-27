@@ -1,0 +1,153 @@
+D:\ExportBlock-3
+|-- configs
+|   |-- default.yaml
+|   `-- demo.yaml
+|-- docs
+|   |-- api.md
+|   |-- config_reference.md
+|   |-- data_dictionary.md
+|   `-- task_map.md
+|-- fixtures
+|   `-- iaga_sample.min
+|-- know
+|   `-- report
+|       |-- 01_PROJECT_MAP.md
+|       |-- dir_tree_depth3.txt
+|       `-- INDEX.md
+|-- outputs
+|   |-- events
+|   |   `-- eq_20200912_024411
+|   |-- features
+|   |   `-- eq_20200912_024411
+|   |-- ingest
+|   |   |-- aef
+|   |   |-- geomag
+|   |   |-- seismic
+|   |   |-- seismic_files
+|   |   `-- seismic_sac
+|   |-- linked
+|   |   `-- eq_20200912_024411
+|   |-- manifests
+|   |   `-- run_20251226_064619.json
+|   |-- models
+|   |   `-- rulebook.yaml
+|   |-- plots
+|   |   |-- html
+|   |   `-- spec
+|   |-- raw
+|   |   |-- index
+|   |   |-- vlf
+|   |   `-- vlf_catalog.parquet
+|   |-- reports
+|   |   |-- spatial_index
+|   |   |-- compression.json
+|   |   |-- compression_stats.json
+|   |   |-- config_snapshot.yaml
+|   |   |-- dq_ingest_iaga.json
+|   |   |-- dq_ingest_mseed.json
+|   |   |-- dq_ingest_vlf.json
+|   |   |-- dq_plots.json
+|   |   |-- dq_raw.json
+|   |   |-- dq_spatial.json
+|   |   |-- dq_standard.json
+|   |   |-- filter_effect.json
+|   |   |-- runtime_report.json
+|   |   `-- station_match.json
+|   `-- standard
+|       |-- source=aef
+|       |-- source=geomag
+|       |-- source=seismic
+|       `-- source=vlf
+|-- scripts
+|   |-- __init__.py
+|   |-- finalize_event_package.py
+|   |-- make_event_bundle.py
+|   |-- pipeline_run.py
+|   `-- render_event_summary.py
+|-- src
+|   |-- api
+|   |   |-- __init__.py
+|   |   `-- app.py
+|   |-- dq
+|   |   |-- __init__.py
+|   |   `-- reporting.py
+|   |-- io
+|   |   |-- __init__.py
+|   |   |-- iaga2002.py
+|   |   |-- seismic.py
+|   |   `-- vlf.py
+|   |-- pipeline
+|   |   |-- __init__.py
+|   |   |-- features.py
+|   |   |-- ingest.py
+|   |   |-- link.py
+|   |   |-- manifest.py
+|   |   |-- model.py
+|   |   |-- plots.py
+|   |   |-- raw.py
+|   |   |-- runner.py
+|   |   |-- spatial.py
+|   |   |-- stages.py
+|   |   `-- standard.py
+|   |-- plots
+|   |   `-- __init__.py
+|   |-- store
+|   |   |-- __init__.py
+|   |   |-- parquet.py
+|   |   |-- paths.py
+|   |   `-- zarr_utils.py
+|   |-- __init__.py
+|   |-- config.py
+|   |-- constants.py
+|   `-- utils.py
+|-- templates
+|   |-- event_summary_template_v3.md
+|   |-- ui_event.html
+|   `-- ui_index.html
+|-- tests
+|   |-- conftest.py
+|   |-- test_anomaly_model.py
+|   |-- test_api_smoke.py
+|   |-- test_event_summary.py
+|   |-- test_iaga_parser.py
+|   |-- test_parquet_batch.py
+|   |-- test_seismic_stationxml.py
+|   |-- test_spatial_index.py
+|   `-- test_vlf_reader.py
+|-- 地磁
+|   |-- kak20200901psec.sec
+|   |-- kny20200901psec.sec
+|   `-- mmb20200901psec.sec
+|-- 地震波
+|   |-- ERM.mseed
+|   |-- ERM.sac
+|   |-- get_data.py
+|   |-- JKA.mseed
+|   |-- JKA.sac
+|   |-- JMM.mseed
+|   |-- JMM.sac
+|   |-- JSD.mseed
+|   |-- JSD.sac
+|   |-- JTM.mseed
+|   |-- JTM.sac
+|   |-- JYT.mseed
+|   |-- JYT.sac
+|   `-- stations_inventory.xml
+|-- 大气电磁信号
+|   |-- 大气电场
+|   |   `-- kak202001-202010daef.min
+|   `-- 电磁波动vlf
+|       `-- vlf
+|-- .gitignore
+|-- .pre-commit-config.yaml
+|-- environment.yml
+|-- plan_final_revised_v9.md
+|-- project_task_list.csv
+|-- pytest.ini
+|-- README.md
+|-- requirements.txt
+|-- translated_readme.md
+|-- 数据源格式.md
+|-- 方祎昌综合课程设计报告.docx
+|-- 综合课程设计报告模板.doc
+`-- 题目内容.md
